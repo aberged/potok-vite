@@ -8,11 +8,9 @@ function createDescriptionHost(): HTMLElement {
 
   const host = document.createElement('div');
   host.id = 'group-panel-description';
-  host.style.position = 'fixed';
-  host.style.right = '0px';
-  host.style.bottom = '0px';
   host.style.width = '100dvw';
   host.style.minHeight = '100dvh';
+  host.style.overflowY = 'auto';
   host.innerHTML = document.body.innerHTML;
   while (document.body.children.length > 0) document.body.removeChild(document.body.children[0]);
   document.body.appendChild(host);
