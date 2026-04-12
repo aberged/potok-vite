@@ -19,7 +19,7 @@ conatainer.addEventListener('click', async (e) => {
   newEll.style.position = 'absolute';
   newEll.style.left = x + 'px';
   newEll.style.top = y + 'px';
-  newEll.innerHTML = `<img src="${profile.profile_picture_url}" alt="potok" class="size-6 shrink-0 rounded-full border border-base-300 bg-base-100 object-cover shadow-sm">`;
+  newEll.innerHTML = `<img src="${profile.profile_picture_url}" alt="potok" class="size-6 shrink-0 rounded-full border border-red-300 bg-base-100 object-cover shadow-sm">`;
   conatainer.appendChild(newEll);
   const app = potok.el;//document.querySelector('#group-panel-description')! as HTMLDivElement;
   const res = await potok.updateGroupDescription(app.children[0].innerHTML);

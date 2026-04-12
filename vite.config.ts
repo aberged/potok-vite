@@ -99,6 +99,13 @@ function createPotokHtml({ bodyHtml, css, js }: { bodyHtml: string; css: string;
   ].join('\n');
 }
 
-export default defineConfig({
-  plugins: [potokBuildPlugin()],
+export default defineConfig(async ({ command }) => {
+  const plugins: Plugin[] = [potokBuildPlugin()];
+
+  const tailwind = (await import('@tailwindcss/vite')).default;
+  plugins.push(tailwind());
+
+  return {
+    plugins,
+  };
 });
