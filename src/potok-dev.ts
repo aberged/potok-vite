@@ -72,6 +72,9 @@ export function installDevPotok(): PotokApi {
         creator_username: 'dev-user',
       };
     },
+    setNewValueCallback(_callback: (value: any) => void) {
+      // No-op in dev
+    },
     eventListenerOptions: { signal: abortController.signal },
   };
 

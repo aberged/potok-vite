@@ -26,6 +26,7 @@ export type PotokApi = {
     creator_id: number;
     creator_username: string;
   }>;
+  setNewValueCallback: (callback: (value: any) => void) => void;
   eventListenerOptions: AddEventListenerOptions;
 };
 
