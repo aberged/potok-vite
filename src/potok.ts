@@ -16,7 +16,7 @@ export type PotokApi = {
     descriptionFormat: "html" | "markdown";
   }>;
   insertGroupValue: (value: any) => void;
-  getGroupDataValues: () => Promise<{
+  getGroupDataValues: (opts: {limit: number, offset: number}) => Promise<{
     id: number;
     content: string;
     content_format: "mardown" | "html";
