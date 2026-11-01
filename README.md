@@ -1,0 +1,146 @@
+# potok-vite
+
+Šablon za pravljenje **potok aplikacija** uz Vite, TypeScript i Tailwind.
+
+Potok aplikacija je HTML koji se nalepi kao opis grupe sa uključenom opcijom „Koristi API“. potok je pokreće u sandboxed iframe-u i daje joj API za čitanje i upis podataka grupe.
+
+## Brzi start
+
+```sh
+npm install
+npm run dev      # lokalno, uz dev mock potok API-ja
+npm run build    # tsc + vite build → dist/potok-build.html
+```
+
+Objavljivanje:
+
+1. Pokreni `npm run build`.
+2. U potok-u otvori grupu, pa **Izmeni grupu** i uključi **Koristi API**.
+3. U polje **Opis** nalepi ceo sadržaj `dist/potok-build.html` i sačuvaj.
+
+Pregled u formi za izmenu prikazuje aplikaciju, ali odbija API pozive (greška `preview`). Pravi rad se vidi tek na stranici grupe.
+
+## Kako radi
+
+`npm run build` pravi običan Vite build. Posle toga `potokBuildPlugin` iz [vite.config.ts](vite.config.ts) spaja sve u jedan fajl, `dist/potok-build.html`:
+
+```html
+<style>/* sav CSS */</style>
+<!-- sadržaj <body> iz index.html -->
+<script type="module">
+  // čeka da se pojavi #group-panel-description.potok, pa:
+  const potok = host.potok;
+  potok.eventListenerOptions = {signal: potok.abortController.signal};
+  // ... tvoj bundle ...
+</script>
+```
+
+potok taj HTML stavlja u iframe:
+
+```html
+<body><div id="group-panel-description"><!-- sadržaj potok-build.html --></div></body>
+```
+
+- Iframe nema `allow-same-origin`, pa ne vidi stranicu, kolačiće ni sesiju. Sa potok-om razgovara samo preko API-ja.
+- Iframe učitava CSS stranice (Tailwind i daisyUI) i prati njenu temu (`data-theme`).
+- `localStorage` radi, a stranica ga čuva posebno za svaku grupu (najviše 256 KB). `sessionStorage` živi samo u memoriji.
+- Aplikacija se ponovo učitava posle prekida i obnove veze. Isto se dešava kad se promeni opis grupe ili pristup korisnika (članstvo, uloge).
+
+## Struktura
+
+| Fajl | Šta je |
+|---|---|
+| [index.html](index.html) | HTML aplikacije; u build ulazi sadržaj `<body>` |
+| [src/main.ts](src/main.ts) | kod aplikacije (trenutno demo) |
+| [src/style.css](src/style.css) | ulaz za Tailwind |
+| [src/potok.ts](src/potok.ts) | tipovi potok API-ja (`potok` i `window.potok`) |
+| [src/potok-dev.ts](src/potok-dev.ts) | dev mock API-ja; ne ulazi u build |
+| [vite.config.ts](vite.config.ts) | Tailwind i `potokBuildPlugin` |
+
+## Demo
+
+U [src/main.ts](src/main.ts) svaki klik je jedna data vrednost `{x, y, picture}`. Avatar svakog člana stoji tamo gde je poslednji put kliknuo.
+
+- Pri učitavanju aplikacija čita sve vrednosti (`getGroupDataValues`).
+- Na klik upisuje novu vrednost (`insertGroupValue`).
+- Preko `setNewValueCallback` uživo pomera avatare svih članova, i sopstveni.
+
+Za svoju aplikaciju zameni sadržaj `<body>` u `index.html` i kod u `src/main.ts`. Fajlovi `potok.ts`, `potok-dev.ts` i `vite.config.ts` ostaju isti.
+
+## API
+
+U kodu aplikacije `potok` je legacy API sa `#group-panel-description`, a `window.potok` je noviji SDK. Oba rade nad istim podacima, a tipovi su u [src/potok.ts](src/potok.ts). Detaljna referenca je u README-u projekta potok-ide, u sekciji „App API“.
+
+### `potok` (legacy)
+
+| Metoda | Vraća |
+|---|---|
+| `insertGroupValue(json, {contentFormat?})` | `{ok: true, value}`; `json` je JSON objekat kao string |
+| `getGroupDataValues(options?)` | bez `limit`: `{ok: true, values}` (sve vrednosti, do 5000); sa `limit`: jednu stranu i `has_more` |
+| `setNewValueCallback(fn)` | ništa; `fn` dobija `CustomEvent` sa novom vrednošću u `detail`, a novi callback zamenjuje stari |
+| `getCurrentProfile()` | profil ili `null` |
+| `getGroupDescription()` | `{description, descriptionFormat}` |
+| `updateGroupDescription(html, {descriptionFormat?})` | `{ok: true, group}` |
+| `el`, `abortController`, `eventListenerOptions` | `#group-panel-description` i `{signal}` za `addEventListener` |
+
+### `window.potok`
+
+| Metoda | Vraća |
+|---|---|
+| `insertValue(data, {contentFormat?})` | `{ok: true, value}`; `data` je objekat ili JSON string |
+| `listValues(options?)` | `{ok: true, values, has_more}`, najviše 200 vrednosti po pozivu (podrazumevano 50) |
+| `onNewValue(listener)` | funkciju za odjavu; `listener` dobija svaku novu vrednost |
+| `getCurrentProfile()` | profil ili `null` |
+| `getDescription()`, `updateDescription(html, {descriptionFormat?})` | `{ok: true, group}` |
+
+Opcije za listanje:
+
+- `limit`, `offset`
+- `afterId`, `beforeId`: samo vrednosti sa većim, odnosno manjim `id`
+- `searchField` i `searchValue`: traži tekst u `data[searchField]`, bez obzira na velika i mala slova
+- `orderBy`: ključ u `data` (polje `"number"` se sortira numerički); bez njega vrednosti idu redom kojim su upisane
+- `orderDir`: `"asc"` (podrazumevano) ili `"desc"`
+
+Vrednost izgleda ovako: `{id, content, data, content_format, is_data, group_id, parent_id, creator_id, creator_username}`. Listane vrednosti imaju i `inserted_at` i `updated_at`.
+
+Neuspeo poziv vraća `{ok: false, error, message?}`. Mogući kodovi greške su `not_a_member`, `forbidden`, `rate_limited`, `invalid_value`, `invalid_description`, `unknown_method`, `preview` i `disconnected`. Ako stranica ne odgovori za 10 s, promise se odbija (reject).
+
+Tip podataka se zadaje generikom:
+
+```ts
+type Item = { name: string; count: number };
+
+async function load() {
+  const reply = await potok.getGroupDataValues<Item>();
+  if (!reply.ok) return console.error(reply.error);
+
+  const total = reply.values.reduce((sum, v) => sum + (v.data?.count ?? 0), 0);
+}
+```
+
+## Dev mock
+
+U `npm run dev` [src/potok-dev.ts](src/potok-dev.ts) pravi `#group-panel-description` i postavlja lažni API koji odgovara isto kao potok:
+
+- Vrednosti čuva u `localStorage` pod ključem `potok-dev:values`, pa prežive reload. Za reset pokreni `localStorage.removeItem('potok-dev:values')` u konzoli.
+- Paginacija, pretraga i sortiranje rade kao na serveru.
+- Posle upisa šalje novu vrednost svim callback-ovima, i pošiljaocu, kao potok.
+- Trenutni profil je `dev-user`, sa admin pravima.
+
+Razlike u odnosu na potok:
+
+- `potok` i `window.potok` su isti objekat sa oba API-ja. U potok-u su odvojeni, i tipovi to poštuju.
+- `updateGroupDescription` samo zapamti opis, a u potok-u bi se aplikacija ponovo učitala.
+- Nema daisyUI stilova stranice, pa klase poput `btn` ili `table` u dev-u nisu stilizovane.
+- Nema drugih korisnika, limita upisa ni grešaka poput `not_a_member`.
+
+## Pravila i zamke
+
+- **Bez top-level `await` u kodu aplikacije.** Wrapper ubacuje bundle u običnu funkciju. Zato je `await` van `async` funkcije sintaksna greška, i aplikacija se ne pokreće. Izuzetak je `if (import.meta.env.DEV)` blok na vrhu `main.ts`, jer se on izbacuje iz build-a.
+- **Sav JS mora biti u jednom fajlu.** Ne koristi dinamički `import()` ni podelu na chunk-ove, jer se objavljuje samo `potok-build.html`.
+- **Slike i fontovi moraju biti inline** (data URL ili SVG u HTML-u) ili sa apsolutnog URL-a. Fajlovi iz `dist/assets` i `public/` se ne objavljuju. Vite sam inline-uje samo asset-e manje od 4 KB (`build.assetsInlineLimit`).
+- **`data` mora biti JSON objekat.** Niz, broj ili tekst server odbija sa `invalid_value`.
+- **Vrednosti se samo dodaju.** API nema izmenu ni brisanje, pa stanje računaj iz svih vrednosti: na primer poslednja vrednost po korisniku, kao u demou, ili zbir.
+- **`updateGroupDescription` menja samu aplikaciju.** Opis grupe je HTML aplikacije, pa je ovaj poziv ponovo pokreće. Ne koristi ga za čuvanje stanja.
+- **Limiti:** najviše 200 vrednosti po strani i 5000 za `getGroupDataValues()` bez `limit`. Upisa može biti najviše 30 zaredom, a limit se obnavlja tokom 10 s.
+- **Prava:** upis traži članstvo u grupi, a izmena opisa traži pravo na izmenu grupe.
