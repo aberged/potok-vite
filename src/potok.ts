@@ -5,6 +5,10 @@
 // - `potok` (legacy): `#group-panel-description`.potok, which the build
 //   wrapper in vite.config.ts hands to the app code as a local `potok`;
 // - `window.potok`: the newer SDK (insertValue, listValues, onNewValue, ...).
+//
+// A group has one app per description: the default one and each alternative
+// description with "Uses API". Each app has its own data values; both APIs
+// see only those of their own app unless asked for the group's (`scope`).
 
 export type PotokContentFormat = "markdown" | "html";
 
@@ -20,6 +24,8 @@ export type PotokError = {
     | "invalid_value"
     | "invalid_description"
     | "unknown_method"
+    /** The call came from an app that is no longer on screen. */
+    | "stale_app"
     | "preview"
     | "disconnected";
   message?: string;
@@ -37,6 +43,8 @@ export type PotokValue<T extends object = PotokData> = {
   parent_id: number | null;
   creator_id: number;
   creator_username: string | null;
+  /** The app the value belongs to: null for the default description's. */
+  description_id: number | null;
 };
 
 /** A data value as listed; timestamps are ISO 8601 strings. */
@@ -59,6 +67,8 @@ export type PotokListOptions = {
   /** Key in `data` to order by; without it values come in insertion order. */
   orderBy?: string;
   orderDir?: "asc" | "desc";
+  /** "group" adds the values of the group's other apps that the viewer can open. */
+  scope?: "group";
 };
 
 export type PotokProfile = {
@@ -75,8 +85,13 @@ export type PotokProfile = {
   roles: string[];
 };
 
+/** The app's own description; `id` is the group's. */
 export type PotokGroupDescription = {
   id: number;
+  /** null for the default description. */
+  description_id: number | null;
+  /** The default description's label (if set) or the alternative description's name. */
+  name: string | null;
   description: string;
   description_format: PotokContentFormat;
 };
@@ -96,8 +111,15 @@ export type PotokSdk = {
   ): Promise<{ ok: true; group: PotokGroupDescription } | PotokError>;
   getDescription(): Promise<{ ok: true; group: PotokGroupDescription } | PotokError>;
   getCurrentProfile(): Promise<PotokProfile | null>;
-  /** Returns a function that removes the listener. */
-  onNewValue<T extends object = PotokData>(listener: (value: PotokValue<T>) => void): () => void;
+  /**
+   * Gets every new value of this app, also the viewer's own; with
+   * `{scope: "group"}` also those of the group's other apps. Returns a
+   * function that removes the listener.
+   */
+  onNewValue<T extends object = PotokData>(
+    listener: (value: PotokValue<T>) => void,
+    options?: { scope?: "group" },
+  ): () => void;
 };
 
 /** Legacy API (`#group-panel-description`.potok). */

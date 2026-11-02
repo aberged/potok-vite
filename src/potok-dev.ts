@@ -15,6 +15,10 @@ import type {
 // (`window.potok`) and legacy shim (`#group-panel-description`.potok), with a
 // local server in place of the page that replies like GroupLive.Show.AppApi.
 // Values are kept in localStorage so they survive a reload.
+//
+// `?app=<id>` in the URL runs the app as the alternative description <id>
+// (what `<meta name="potok-app">` tells the SDK); without it, as the default
+// description. Every app's values share one store, as they do in the group.
 
 const VALUES_STORAGE_KEY = 'potok-dev:values';
 const DEFAULT_LIST_LIMIT = 50;
@@ -35,10 +39,20 @@ const devProfile: PotokProfile = {
   roles: [],
 };
 
-const newValueListeners = new Set<(value: PotokValue) => void>();
+const appParam = Number(new URLSearchParams(location.search).get('app'));
+const ownDescriptionId = Number.isInteger(appParam) && appParam > 0 ? appParam : null;
+
+const ownValue = (value: PotokValue) => value.description_id === ownDescriptionId;
+
+// listener -> whether it gets the values of every app in the group.
+const newValueListeners = new Map<(value: PotokValue) => void, boolean>();
 
 function deliverNewValue(value: PotokValue) {
-  newValueListeners.forEach((listener) => {
+  const own = ownValue(value);
+
+  newValueListeners.forEach((allApps, listener) => {
+    if (!own && !allApps) return;
+
     try {
       listener(value);
     } catch (error) {
@@ -46,7 +60,7 @@ function deliverNewValue(value: PotokValue) {
     }
   });
 
-  window.dispatchEvent(new CustomEvent('phx:new_data_value', { detail: value }));
+  if (own) window.dispatchEvent(new CustomEvent('phx:new_data_value', { detail: value }));
 }
 
 function createDescriptionHost(): HTMLElement {
@@ -70,7 +84,10 @@ function createDescriptionHost(): HTMLElement {
 function loadValues(): PotokListedValue[] {
   try {
     const stored: unknown = JSON.parse(localStorage.getItem(VALUES_STORAGE_KEY) || '[]');
-    return Array.isArray(stored) ? stored : [];
+    if (!Array.isArray(stored)) return [];
+
+    // Values stored before apps had ids belong to the default description.
+    return stored.map((row: PotokListedValue) => ({ ...row, description_id: row.description_id ?? null }));
   } catch {
     return [];
   }
@@ -150,12 +167,22 @@ type DevServer = ReturnType<typeof createServer>;
 
 function createServer(el: HTMLElement) {
   const values = loadValues();
+
+  // A tab with another `?app` writes to the same store; its values are taken
+  // in before every call, so that neither tab overwrites the other's.
+  const syncValues = () => {
+    const known = new Set(values.map((row) => row.id));
+    values.push(...loadValues().filter((row) => !known.has(row.id)));
+  };
+
   // In potok the group description is the app's HTML.
   let description = el.innerHTML;
   let descriptionFormat: PotokContentFormat = 'html';
 
   const group = (): PotokGroupDescription => ({
     id: 1,
+    description_id: ownDescriptionId,
+    name: ownDescriptionId === null ? null : `alt-${ownDescriptionId}`,
     description,
     description_format: descriptionFormat,
   });
@@ -167,6 +194,7 @@ function createServer(el: HTMLElement) {
         return { ok: false, error: 'invalid_value', message: 'Could not create value.' };
       }
 
+      syncValues();
       const now = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
       const row: PotokListedValue = {
         id: values.reduce((max, v) => Math.max(max, v.id), 0) + 1,
@@ -178,6 +206,7 @@ function createServer(el: HTMLElement) {
         parent_id: null,
         creator_id: devProfile.id,
         creator_username: devProfile.username,
+        description_id: ownDescriptionId,
         inserted_at: now,
         updated_at: now,
       };
@@ -198,7 +227,10 @@ function createServer(el: HTMLElement) {
       const searchField = options.searchField?.trim();
       const searchValue = options.searchValue?.trim().toLowerCase();
 
+      syncValues();
+      // "group": every app's values (in dev the viewer can open them all).
       const rows = values
+        .filter((row) => options.scope === 'group' || ownValue(row))
         .filter((row) => afterId === undefined || row.id > afterId)
         .filter((row) => beforeId === undefined || row.id < beforeId)
         .filter((row) => !searchField || !searchValue || dataText(row, searchField).toLowerCase().includes(searchValue))
@@ -214,7 +246,7 @@ function createServer(el: HTMLElement) {
     }): { ok: true; group: PotokGroupDescription } {
       description = params.description;
       descriptionFormat = params.description_format ?? descriptionFormat;
-      console.info('[potok-dev] Group description updated; in potok the app restarts with the new HTML.');
+      console.info('[potok-dev] Description updated; in potok the app restarts with the new HTML.');
 
       return { ok: true, group: group() };
     },
@@ -262,11 +294,11 @@ function createSdk(server: DevServer): PotokSdk {
       return reply.ok ? reply.profile : null;
     },
 
-    onNewValue(listener) {
+    onNewValue(listener, options = {}) {
       if (typeof listener !== 'function') return () => {};
 
       const added = listener as (value: PotokValue) => void;
-      newValueListeners.add(added);
+      newValueListeners.set(added, options.scope === 'group');
       return () => newValueListeners.delete(added);
     },
   };
@@ -332,7 +364,7 @@ function createLegacy(sdk: PotokSdk, abortController: AbortController): PotokApi
       // The old callback received the `phx:new_data_value` event itself.
       if (legacyCallback) newValueListeners.delete(legacyCallback);
       legacyCallback = (value) => fn(new CustomEvent('phx:new_data_value', { detail: value as PotokValue<T> }));
-      newValueListeners.add(legacyCallback);
+      newValueListeners.set(legacyCallback, false);
     },
   };
 }
