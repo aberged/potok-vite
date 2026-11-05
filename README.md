@@ -110,13 +110,15 @@ U kodu aplikacije `potok` je legacy API sa `#group-panel-description`, a `window
 | `onNewValue(listener, {scope?})` | funkciju za odjavu; `listener` dobija svaku novu vrednost ove aplikacije, a uz `scope: "group"` i ostalih aplikacija grupe |
 | `getCurrentProfile()` | profil ili `null` |
 | `getDescription()`, `updateDescription(html, {descriptionFormat?})` | `{ok: true, group}` za opis ove aplikacije |
-| `listSubgroups(name, {limit?, beforeId?})` | `{ok: true, groups, has_more}`: grupe ispod direktne podgrupe sa tačnim imenom `name`, od najnovije, najviše 50 po pozivu (podrazumevano 20) |
+| `listSubgroups(name, {limit?, beforeId?, from?, to?, aroundId?})` | `{ok: true, groups, has_more, has_newer}`: grupe ispod direktne podgrupe sa tačnim imenom `name`, od najnovije, najviše 50 po pozivu (podrazumevano 20). `from` i `to` su trenuci u ISO 8601 sa zonom i ostavljaju grupe objavljene u tom periodu: `from` ulazi u period, a `to` ne ulazi. `aroundId` umesto prve strane daje grupe oko te jedne, ma koliko duboko stajala: do `limit` sa svake strane, a `has_newer` kaže da iznad njih ima još. Grupa koje nema u listi daje prvu stranu, pa proveri da li je `id` u `groups` |
 | `openGroup(id, {tab?})` | `{ok: true}`; vodi gledaoca na roditelja ove grupe, u direktnu podgrupu ili u grupu koju `listSubgroups` može da vrati: u chat, sa `tab: "description"` na opis, gde radi grupa koja je aplikacija, a sa `tab: "settings"` na podešavanja. Aplikacija se gasi sa stranicom |
 | `getGroup()` | `{ok: true, group}`: ova grupa, njen roditelj i šta gledalac tu sme |
 | `toggleGroupReaction(id, emoji)` | `{ok: true, reactions}`; dodaje reakciju gledaoca na grupu ispod ove, ili je skida, kao klik na reakciju. Radi za svakog gledaoca sa `can_react` na toj grupi, i troši limit upisa |
 | `pickEmoji()` | `{ok: true, emoji}`; gledalac bira emoji u Potokovom biraču. Poziv čeka koliko god treba, a `{ok: false, error: "cancelled"}` znači da je birač zatvoren |
-| `shareGroup(id)` | `{ok: true}`; stranica nudi deljenje linka grupe do koje stiže `openGroup`. Frame nema ni Web Share ni clipboard |
-| `listChildren({limit?, beforeId?})` | `{ok: true, groups, has_more}`: direktne podgrupe, istim redom kao `listSubgroups` |
+| `shareGroup(id, {inApp?})` | `{ok: true}`; stranica nudi deljenje linka grupe do koje stiže `openGroup`. Frame nema ni Web Share ni clipboard. Sa `inApp: true` link vodi na ovu aplikaciju otvorenu na toj grupi, koja mora da bude ispod nje |
+| `linkGroup(id)` | `{ok: true}`; upisuje grupu u adresu strane (`?at=<id>`), bez novog koraka u istoriji, pa ta adresa otvara aplikaciju baš tu |
+| `getLinkedGroup()` | `{ok: true, group_id}`: grupa iz adrese ili `null`. Niko je ne proverava, to radi `aroundId` |
+| `listChildren({limit?, beforeId?, from?, to?, aroundId?})` | `{ok: true, groups, has_more, has_newer}`: direktne podgrupe, istim redom i sa istim opcijama kao `listSubgroups` |
 | `getChild(id)` | `{ok: true, group}` sa izvorom opisa; `description` je `null` za grupu koju gledalac ne sme da menja i za aplikaciju |
 | `createChild(attrs)` | `{ok: true, group}`; nova podgrupa, a gledalac postaje njen admin |
 | `updateChild(id, attrs)` | `{ok: true, group}`; menja samo polja koja dobije, a grupu koja je aplikacija odbija sa `forbidden` |
