@@ -111,7 +111,14 @@ U kodu aplikacije `potok` je legacy API sa `#group-panel-description`, a `window
 | `getCurrentProfile()` | profil ili `null` |
 | `getDescription()`, `updateDescription(html, {descriptionFormat?})` | `{ok: true, group}` za opis ove aplikacije |
 | `listSubgroups(name, {limit?, beforeId?})` | `{ok: true, groups, has_more}`: grupe ispod direktne podgrupe sa tačnim imenom `name`, od najnovije, najviše 50 po pozivu (podrazumevano 20) |
-| `openGroup(id, {tab?})` | `{ok: true}`; vodi gledaoca u chat grupe koju `listSubgroups` može da vrati, a sa `tab: "description"` na njen opis, gde radi grupa koja je aplikacija. Aplikacija se gasi sa stranicom |
+| `openGroup(id, {tab?})` | `{ok: true}`; vodi gledaoca na roditelja ove grupe, u direktnu podgrupu ili u grupu koju `listSubgroups` može da vrati: u chat, sa `tab: "description"` na opis, gde radi grupa koja je aplikacija, a sa `tab: "settings"` na podešavanja. Aplikacija se gasi sa stranicom |
+| `getGroup()` | `{ok: true, group}`: ova grupa, njen roditelj i šta gledalac tu sme |
+| `listChildren({limit?, beforeId?})` | `{ok: true, groups, has_more}`: direktne podgrupe, istim redom kao `listSubgroups` |
+| `getChild(id)` | `{ok: true, group}` sa izvorom opisa; `description` je `null` za grupu koju gledalac ne sme da menja i za aplikaciju |
+| `createChild(attrs)` | `{ok: true, group}`; nova podgrupa, a gledalac postaje njen admin |
+| `updateChild(id, attrs)` | `{ok: true, group}`; menja samo polja koja dobije, a grupu koja je aplikacija odbija sa `forbidden` |
+| `withdrawChild(id)` | `{ok: true, group}`; grupa postaje privatna, prestaje da nasleđuje i nasleđeni članovi izlaze |
+| `previewDescription(text, {descriptionFormat?})` | `{ok: true, html}`: tekst onako kako će ga feed prikazati, prečišćen na serveru |
 
 Opcije za listanje:
 
@@ -126,11 +133,19 @@ Vrednost izgleda ovako: `{id, content, data, content_format, is_data, group_id, 
 
 `group` izgleda ovako: `{id, description_id, name, description, description_format}`. `id` je id grupe, a `description_id` je `null` za podrazumevani opis.
 
-Podgrupa iz `listSubgroups` izgleda ovako: `{id, name, description_html, app_description, uses_api, picture_url, inserted_at, last_value_at}`. `description_html` je prečišćen HTML, pa sme u stranicu aplikacije, a element sa klasom `rich-content` oko njega daje stilove stranice grupe. `null` je za grupu bez opisa i za aplikaciju, čiji je opis izvorni kod. `app_description` je ono što aplikacija kaže o sebi u meta tagovima (`<meta name="description">`), kao običan tekst, a `null` je za sve ostale grupe.
+Podgrupa iz `listSubgroups` i `listChildren` izgleda ovako: `{id, name, description_html, app_description, uses_api, picture_url, is_public, inherits_members, creator_id, inserted_at, published_at, last_value_at}`. `description_html` je prečišćen HTML, pa sme u stranicu aplikacije, a element sa klasom `rich-content` oko njega daje stilove stranice grupe. `null` je za grupu bez opisa i za aplikaciju, čiji je opis izvorni kod. `app_description` je ono što aplikacija kaže o sebi u meta tagovima (`<meta name="description">`), kao običan tekst, a `null` je za sve ostale grupe.
 
-`listSubgroups` vidi ono što vidi i gledalac: bez niti, direktnih razgovora i privatnih grupa čiji gledalac nije član. Ako gledalac ne vidi ni samu podgrupu, odgovor je `not_found`. Imena nisu jedinstvena, pa od više podgrupa istog imena važi najstarija. Redosled se ne pomera, pa je sledeća strana `beforeId` sa `id`-jem poslednje grupe prethodne strane.
+`listSubgroups` vidi ono što vidi i gledalac: bez niti, direktnih razgovora i privatnih grupa čiji gledalac nije član. Ako gledalac ne vidi ni samu podgrupu, odgovor je `not_found`. Imena nisu jedinstvena, pa od više podgrupa istog imena važi najstarija. Sledeća strana je `beforeId` sa `id`-jem poslednje grupe prethodne strane. Red je od najnovije, a zatvorena grupa (privatna, bez nasleđivanja) računa se od trenutka kad se otvorila, što je `published_at`.
 
-Neuspeo poziv vraća `{ok: false, error, message?}`. Mogući kodovi greške su `not_a_member`, `forbidden`, `rate_limited`, `invalid_value`, `invalid_description`, `unknown_method`, `stale_app`, `not_found`, `preview` i `disconnected`. Ako stranica ne odgovori za 10 s, promise se odbija (reject).
+`listChildren`, `getChild`, `createChild`, `updateChild`, `withdrawChild` i `previewDescription` rade u ime gledaoca, pa traže gledaoca koji sme da menja grupu aplikacije (`can_manage_children` iz `getGroup`). Ostali dobijaju `forbidden`. Dosežu samo direktne podgrupe. Pravljenje traži i `create_subgroups` (`can_create_children`), a izmena traži i `edit_group` u samoj podgrupi.
+
+`attrs` su `{name, description, descriptionFormat, isPublic, inheritsMembers, picture}`. Aplikacija ne može da postavi `uses_api` ni bilo šta drugo, i nema poziva za brisanje grupe. `picture` je adresa slike ili `data:` adresa, najviše 1.000.000 znakova, a stiže na `picture_url`, koji ne traži sesiju ni za privatnu grupu.
+
+`group` iz `getGroup` izgleda ovako: `{id, name, is_public, inherits_members, parent, can_manage_children, can_create_children, everyone_creates_subgroups}`, a `parent` je `{id, name, is_public, uses_api}` ili `null` ako gledalac ne vidi tu grupu. `group` iz poziva za podgrupe je podgrupa sa još `{description, description_format, can_edit, member_count, updated_at}`.
+
+Primer dve aplikacije na ovim pozivima, od kojih jedna piše ono što druga prikazuje, opisan je u projektu potok-ide, u `docs/feed-i-feedcreator.md`.
+
+Neuspeo poziv vraća `{ok: false, error, message?}`. Mogući kodovi greške su `not_a_member`, `forbidden`, `rate_limited`, `invalid_value`, `invalid_description`, `invalid_group`, `unknown_method`, `stale_app`, `not_found`, `preview` i `disconnected`. Ako stranica ne odgovori za 10 s, promise se odbija (reject).
 
 Tip podataka se zadaje generikom:
 
@@ -154,6 +169,8 @@ U `npm run dev` [src/potok-dev.ts](src/potok-dev.ts) pravi `#group-panel-descrip
 - Posle upisa šalje novu vrednost svim callback-ovima, i pošiljaocu, kao potok.
 - Trenutni profil je `dev-user`, sa admin pravima.
 - Grupe za `listSubgroups` stoje u `localStorage` pod ključem `potok-dev:subgroups`, kao `{"<ime podgrupe>": PotokSubgroup[]}`, a puni ih sama aplikacija u dev-u. `openGroup` samo piše u konzolu.
+- Podgrupe aplikacije stoje pod ključem `potok-dev:children`. `potok-dev:group` menja polja koja vraća `getGroup`, na primer `{"can_manage_children": false}` za gledaoca bez prava.
+- `previewDescription` i `description_html` su gruba zamena za server: skidaju komentare i skripte, a markdown ostaje običan tekst. Šta server stvarno propušta vidi se tek u potok-u.
 - Bez parametara aplikacija radi kao podrazumevani opis. Sa `?app=<id>` u URL-u (npr. `http://localhost:5173/?app=2`) radi kao alternativni opis sa tim id-jem. Vrednosti svih aplikacija stoje pod istim ključem, pa `scope: "group"` vidi sve.
 
 Razlike u odnosu na potok:
