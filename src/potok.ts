@@ -26,6 +26,8 @@ export type PotokError = {
     | "unknown_method"
     /** The call came from an app that is no longer on screen. */
     | "stale_app"
+    /** No such sub-group or group, or the viewer cannot see it. */
+    | "not_found"
     | "preview"
     | "disconnected";
   message?: string;
@@ -96,6 +98,34 @@ export type PotokGroupDescription = {
   description_format: PotokContentFormat;
 };
 
+/** A group under a direct sub-group of the app's group; timestamps are ISO 8601 strings. */
+export type PotokSubgroup = {
+  id: number;
+  name: string;
+  /**
+   * The description as sanitized HTML, safe to put in the page; a `rich-content`
+   * element around it gives the styles of the group page. null for a group
+   * without a description and for an app, whose description is its source code.
+   */
+  description_html: string | null;
+  /** What an app says about itself in its meta tags, as plain text; null otherwise. */
+  app_description: string | null;
+  uses_api: boolean;
+  picture_url: string;
+  inserted_at: string;
+  /** When the newest chat value was posted. */
+  last_value_at: string | null;
+};
+
+export type PotokGroupTab = "chat" | "description";
+
+export type PotokSubgroupListOptions = {
+  /** Page size, at most 50 (the server's default is 20). */
+  limit?: number;
+  /** The id of the last group of the previous page. */
+  beforeId?: number;
+};
+
 /** `window.potok`. Calls reject if the page does not answer within 10s. */
 export type PotokSdk = {
   insertValue<T extends object = PotokData>(
@@ -111,6 +141,21 @@ export type PotokSdk = {
   ): Promise<{ ok: true; group: PotokGroupDescription } | PotokError>;
   getDescription(): Promise<{ ok: true; group: PotokGroupDescription } | PotokError>;
   getCurrentProfile(): Promise<PotokProfile | null>;
+  /**
+   * The groups under this group's direct sub-group called exactly `name`,
+   * newest first, as far as the viewer can see them. Of several sub-groups
+   * with one name the oldest counts.
+   */
+  listSubgroups(
+    name: string,
+    options?: PotokSubgroupListOptions,
+  ): Promise<{ ok: true; groups: PotokSubgroup[]; has_more: boolean } | PotokError>;
+  /**
+   * Takes the viewer to a group `listSubgroups` can return: to its chat, or with
+   * `tab: "description"` to its description, where a group that is an app runs.
+   * The app ends with the page.
+   */
+  openGroup(id: number, options?: { tab?: PotokGroupTab }): Promise<{ ok: true } | PotokError>;
   /**
    * Gets every new value of this app, also the viewer's own; with
    * `{scope: "group"}` also those of the group's other apps. Returns a

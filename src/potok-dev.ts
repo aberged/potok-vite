@@ -4,10 +4,13 @@ import type {
   PotokData,
   PotokError,
   PotokGroupDescription,
+  PotokGroupTab,
   PotokListedValue,
   PotokListOptions,
   PotokProfile,
   PotokSdk,
+  PotokSubgroup,
+  PotokSubgroupListOptions,
   PotokValue,
 } from './potok';
 
@@ -19,10 +22,17 @@ import type {
 // `?app=<id>` in the URL runs the app as the alternative description <id>
 // (what `<meta name="potok-app">` tells the SDK); without it, as the default
 // description. Every app's values share one store, as they do in the group.
+//
+// The groups `listSubgroups` returns are in localStorage as well, under
+// `potok-dev:subgroups`: `{"<sub-group name>": PotokSubgroup[]}`. The app fills
+// that key itself in dev; without the name the call answers `not_found`.
 
 const VALUES_STORAGE_KEY = 'potok-dev:values';
+const SUBGROUPS_STORAGE_KEY = 'potok-dev:subgroups';
 const DEFAULT_LIST_LIMIT = 50;
 const MAX_LIST_LIMIT = 200;
+const DEFAULT_SUBGROUP_LIMIT = 20;
+const MAX_SUBGROUP_LIMIT = 50;
 const LEGACY_PAGE_SIZE = 200;
 const LEGACY_MAX_ROWS = 5_000;
 
@@ -98,6 +108,15 @@ function saveValues(values: PotokListedValue[]) {
     localStorage.setItem(VALUES_STORAGE_KEY, JSON.stringify(values));
   } catch {
     // Storage full or blocked: the values live until the next reload.
+  }
+}
+
+function loadSubgroups(): Record<string, PotokSubgroup[]> {
+  try {
+    const stored: unknown = JSON.parse(localStorage.getItem(SUBGROUPS_STORAGE_KEY) || '{}');
+    return stored && typeof stored === 'object' ? (stored as Record<string, PotokSubgroup[]>) : {};
+  } catch {
+    return {};
   }
 }
 
@@ -258,6 +277,33 @@ function createServer(el: HTMLElement) {
     currentProfile(): { ok: true; profile: PotokProfile } {
       return { ok: true, profile: devProfile };
     },
+
+    listSubgroups(
+      name: string,
+      options: PotokSubgroupListOptions,
+    ): { ok: true; groups: PotokSubgroup[]; has_more: boolean } | PotokError {
+      const groups = loadSubgroups()[name];
+      if (!groups) return { ok: false, error: 'not_found' };
+
+      const limit = Math.min(nonNegativeInteger(options.limit) ?? DEFAULT_SUBGROUP_LIMIT, MAX_SUBGROUP_LIMIT);
+      const beforeId = nonNegativeInteger(options.beforeId);
+
+      const rows = groups
+        .filter((group) => beforeId === undefined || group.id < beforeId)
+        .sort((a, b) => b.id - a.id)
+        .slice(0, limit + 1);
+
+      return { ok: true, groups: rows.slice(0, limit), has_more: rows.length > limit };
+    },
+
+    openGroup(id: number, tab: PotokGroupTab | undefined): { ok: true } | PotokError {
+      const known = Object.values(loadSubgroups()).some((groups) => groups.some((group) => group.id === id));
+      if (!known) return { ok: false, error: 'not_found' };
+
+      const path = tab === 'description' ? 'group_home' : 'values';
+      console.info(`[potok-dev] openGroup: in potok the viewer goes to /groups/${id}/${path} and the app ends.`);
+      return { ok: true };
+    },
   };
 }
 
@@ -292,6 +338,14 @@ function createSdk(server: DevServer): PotokSdk {
     async getCurrentProfile() {
       const reply = server.currentProfile();
       return reply.ok ? reply.profile : null;
+    },
+
+    async listSubgroups(name, options = {}) {
+      return server.listSubgroups(name, options);
+    },
+
+    async openGroup(id, options = {}) {
+      return server.openGroup(id, options.tab);
     },
 
     onNewValue(listener, options = {}) {
