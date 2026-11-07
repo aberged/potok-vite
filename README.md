@@ -113,6 +113,11 @@ U kodu aplikacije `potok` je legacy API sa `#group-panel-description`, a `window
 | `listSubgroups(name, {limit?, beforeId?, from?, to?, aroundId?})` | `{ok: true, groups, has_more, has_newer}`: grupe ispod direktne podgrupe sa tačnim imenom `name`, od najnovije, najviše 50 po pozivu (podrazumevano 20). `from` i `to` su trenuci u ISO 8601 sa zonom i ostavljaju grupe objavljene u tom periodu: `from` ulazi u period, a `to` ne ulazi. `aroundId` umesto prve strane daje grupe oko te jedne, ma koliko duboko stajala: do `limit` sa svake strane, a `has_newer` kaže da iznad njih ima još. Grupa koje nema u listi daje prvu stranu, pa proveri da li je `id` u `groups` |
 | `openGroup(id, {tab?})` | `{ok: true}`; vodi gledaoca na roditelja ove grupe, u direktnu podgrupu ili u grupu koju `listSubgroups` može da vrati: u chat, sa `tab: "description"` na opis, gde radi grupa koja je aplikacija, a sa `tab: "settings"` na podešavanja. Aplikacija se gasi sa stranicom |
 | `getGroup()` | `{ok: true, group}`: ova grupa, njen roditelj i šta gledalac tu sme |
+| `listPolls({status?, beforeId?})` | `{ok: true, polls, has_more}`: glasanja ove grupe, od najnovijeg, po 30, onoliko koliko njihova pravila pokazuju gledaocu. `status` je `"open"`, `"closed"` ili `"waiting"`, ono u čemu gledalac još može da glasa |
+| `getPoll(id)` | `{ok: true, poll}`; broj koji gledalac ne sme da vidi je `null` |
+| `openPoll(id)` | `{ok: true}`; otvara glasanje u dijalogu Potoka, preko aplikacije, gde gledalac glasa. Aplikacija samo čita: radi za svakog gledaoca, a glas može da bude konačan |
+| `openPollForm()` | `{ok: true}`; otvara Potokovu formu za novo glasanje, ako `can_start_polls` iz `getGroup` to dozvoljava |
+| `onPollChange(listener)` | funkciju za odjavu; `listener` dobija id glasanja koje se promenilo, dobilo glas ili je obrisano |
 | `toggleGroupReaction(id, emoji)` | `{ok: true, reactions}`; dodaje reakciju gledaoca na grupu ispod ove, ili je skida, kao klik na reakciju. Radi za svakog gledaoca sa `can_react` na toj grupi, i troši limit upisa |
 | `pickEmoji()` | `{ok: true, emoji}`; gledalac bira emoji u Potokovom biraču. Poziv čeka koliko god treba, a `{ok: false, error: "cancelled"}` znači da je birač zatvoren |
 | `shareGroup(id, {inApp?})` | `{ok: true}`; stranica nudi deljenje linka grupe do koje stiže `openGroup`. Frame nema ni Web Share ni clipboard. Sa `inApp: true` link vodi na ovu aplikaciju otvorenu na toj grupi, koja mora da bude ispod nje |
@@ -146,7 +151,7 @@ Podgrupa iz `listSubgroups` i `listChildren` izgleda ovako: `{id, name, descript
 
 `attrs` su `{name, description, descriptionFormat, isPublic, inheritsMembers, picture}`. Aplikacija ne može da postavi `uses_api` ni bilo šta drugo, i nema poziva za brisanje grupe. `picture` je adresa slike ili `data:` adresa, najviše 1.000.000 znakova, a stiže na `picture_url`, koji ne traži sesiju ni za privatnu grupu.
 
-`group` iz `getGroup` izgleda ovako: `{id, name, is_public, inherits_members, parent, can_manage_children, can_create_children, everyone_creates_subgroups}`, a `parent` je `{id, name, is_public, uses_api}` ili `null` ako gledalac ne vidi tu grupu. `group` iz poziva za podgrupe je podgrupa sa još `{description, description_format, can_edit, member_count, updated_at}`.
+`group` iz `getGroup` izgleda ovako: `{id, name, is_public, inherits_members, parent, can_manage_children, can_create_children, everyone_creates_subgroups, can_start_polls}`, a `parent` je `{id, name, is_public, uses_api}` ili `null` ako gledalac ne vidi tu grupu. `group` iz poziva za podgrupe je podgrupa sa još `{description, description_format, can_edit, member_count, updated_at}`.
 
 Primer dve aplikacije na ovim pozivima, od kojih jedna piše ono što druga prikazuje, opisan je u projektu potok-ide, u `docs/feed-i-feedcreator.md`.
 
@@ -174,6 +179,7 @@ U `npm run dev` [src/potok-dev.ts](src/potok-dev.ts) pravi `#group-panel-descrip
 - Posle upisa šalje novu vrednost svim callback-ovima, i pošiljaocu, kao potok.
 - Trenutni profil je `dev-user`, sa admin pravima.
 - Grupe za `listSubgroups` stoje u `localStorage` pod ključem `potok-dev:subgroups`, kao `{"<ime podgrupe>": PotokSubgroup[]}`, a puni ih sama aplikacija u dev-u. `openGroup` i `shareGroup` samo pišu u konzolu, `toggleGroupReaction` menja taj isti ključ, a `pickEmoji` pita preko `prompt`-a.
+- Glasanja stoje pod ključem `potok-dev:polls`, kao `PotokPoll[]`. Potokove forme i glasanja ovde nema: `openPollForm` dodaje glasanje, a `openPoll` glasa za prvi odgovor.
 - Podgrupe aplikacije stoje pod ključem `potok-dev:children`. `potok-dev:group` menja polja koja vraća `getGroup`, na primer `{"can_manage_children": false}` za gledaoca bez prava.
 - `previewDescription` i `description_html` su gruba zamena za server: skidaju komentare i skripte, a markdown ostaje običan tekst. Šta server stvarno propušta vidi se tek u potok-u.
 - Bez parametara aplikacija radi kao podrazumevani opis. Sa `?app=<id>` u URL-u (npr. `http://localhost:5173/?app=2`) radi kao alternativni opis sa tim id-jem. Vrednosti svih aplikacija stoje pod istim ključem, pa `scope: "group"` vidi sve.
