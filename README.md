@@ -106,7 +106,8 @@ U kodu aplikacije `potok` je legacy API sa `#group-panel-description`, a `window
 | Metoda | Vraća |
 |---|---|
 | `insertValue(data, {contentFormat?})` | `{ok: true, value}`; `data` je objekat ili JSON string |
-| `listValues(options?)` | `{ok: true, values, has_more}`, najviše 200 vrednosti po pozivu (podrazumevano 50) |
+| `listValues(options?)` | `{ok: true, values, has_more, total}`, najviše 200 vrednosti po pozivu (podrazumevano 50) |
+| `aggregateValues(options?)` | `{ok: true, total, fields, buckets, other}`: zbir, prosek, najmanji i najveći broj, izračunati u bazi, nad istim vrednostima koje bi `listValues` listao sa istim filterima. Opcije su ispod |
 | `onNewValue(listener, {scope?})` | funkciju za odjavu; `listener` dobija svaku novu vrednost ove aplikacije, a uz `scope: "group"` i ostalih aplikacija grupe |
 | `getCurrentProfile()` | profil ili `null` |
 | `getDescription()`, `updateDescription(html, {descriptionFormat?})` | `{ok: true, group}` za opis ove aplikacije |
@@ -133,11 +134,21 @@ U kodu aplikacije `potok` je legacy API sa `#group-panel-description`, a `window
 Opcije za listanje:
 
 - `limit`, `offset`
-- `afterId`, `beforeId`: samo vrednosti sa većim, odnosno manjim `id`
-- `searchField` i `searchValue`: traži tekst u `data[searchField]`, bez obzira na velika i mala slova
-- `orderBy`: ključ u `data` (polje `"number"` se sortira numerički); bez njega vrednosti idu redom kojim su upisane
-- `orderDir`: `"asc"` (podrazumevano) ili `"desc"`
+- `orderDir`: `"asc"` (podrazumevano, od najstarije) ili `"desc"` (od najnovije)
+- `afterId`, `beforeId`: strana odmah uz taj `id`, redom koji si tražio. `beforeId` daje vrednosti odmah pre njega, `afterId` one odmah posle, a oba one između. `has_more` kaže da li iza strane ima još, dalje od kursora: uz samo `beforeId` to su starije vrednosti. `offset` se broji od kursora
+- `match`: objekat; ostaju vrednosti čiji ga `data` sadrži (`{status: "open"}`). Poredi i JSON tip, pa `{n: 5}` ne nalazi `"5"`, a `{tags: ["a"]}` nalazi svaku listu koja ima `"a"`. Sve osim objekta (do 4 KB kao JSON) daje `invalid_match`
+- `searchField` i `searchValue`: traži tekst u `data[searchField]`, bez obzira na velika i mala slova; sužava zajedno sa `match`
+- `total: true`: dodaje `total`, koliko vrednosti filteri ostavljaju na svim stranama
+- `orderBy`: ključ u `data` (polje `"number"` se sortira numerički), u smeru `orderDir`. Tada kursori samo sužavaju po `id`, a strane idu preko `offset`
 - `scope`: bez njega samo vrednosti ove aplikacije; `"group"` dodaje vrednosti ostalih aplikacija grupe
+
+Opcije za `aggregateValues`, uz `match`, `searchField` / `searchValue` i `scope` iznad:
+
+- `fields`: do 5 ključeva. Za svaki `fields[ključ]` je `{count, sum, avg, min, max}` nad vrednostima koje tu imaju broj: JSON broj ili string koji je običan decimalni broj (`"12"`, `"-3.5"`, ali ne `"1,5"` ni `"1e3"`), do 61 znak. `count` kaže koliko ih je bilo; bez nijednog, `sum` je 0, a ostalo `null`
+- `under`: putanja od najviše 3 ključa do objekta u kom se ključevi čitaju (`["a"]`); podrazumevano vrh `data`
+- `groupBy`: ključ. Tada je `buckets` lista `[{value, count, fields}]` po vrednosti tog ključa, prvo 50 najvećih, a `other` je `{buckets, count}` za ostale. String, broj ili boolean je grupa, kao tekst do 200 znakova; vrednosti bez njega su grupa `null`. Bez `groupBy`, `buckets` i `other` su `null`
+- Ključevi imaju od 1 do 64 bajta, a sve ostalo daje `invalid_aggregate`. Poziv traje najviše 5 s (`timeout`), a sa `summarizeValues` ulazi u limit od 120 u minuti po gledaocu (`rate_limited`), jer svaki čita sve vrednosti koje filteri ostavljaju
+- `{collection}` radi za one koji čitaju celu kolekciju, i čita na `under` iz njenog pravila
 
 Vrednost izgleda ovako: `{id, content, data, content_format, is_data, group_id, parent_id, creator_id, creator_username, description_id}`. Listane vrednosti imaju i `inserted_at` i `updated_at`.
 
@@ -155,7 +166,7 @@ Podgrupa iz `listSubgroups` i `listChildren` izgleda ovako: `{id, name, descript
 
 Primer dve aplikacije na ovim pozivima, od kojih jedna piše ono što druga prikazuje, opisan je u projektu potok-ide, u `docs/feed-i-feedcreator.md`.
 
-Neuspeo poziv vraća `{ok: false, error, message?}`. Mogući kodovi greške su `not_a_member`, `forbidden`, `rate_limited`, `invalid_value`, `invalid_description`, `invalid_group`, `unknown_method`, `stale_app`, `not_found`, `preview` i `disconnected`. Ako stranica ne odgovori za 10 s, promise se odbija (reject).
+Neuspeo poziv vraća `{ok: false, error, message?}`. Mogući kodovi greške su `not_a_member`, `forbidden`, `rate_limited`, `invalid_value`, `invalid_description`, `invalid_group`, `invalid_match`, `invalid_aggregate`, `timeout`, `unknown_method`, `stale_app`, `not_found`, `preview` i `disconnected`. Ako stranica ne odgovori za 10 s, promise se odbija (reject).
 
 Tip podataka se zadaje generikom:
 
@@ -168,6 +179,13 @@ async function load() {
 
   const total = reply.values.reduce((sum, v) => sum + (v.data?.count ?? 0), 0);
 }
+```
+
+Isti zbir, a da aplikacija ne čita sve vrednosti, daje `aggregateValues`:
+
+```ts
+const reply = await window.potok.aggregateValues({ fields: ["count"] });
+if (reply.ok) console.log(reply.fields.count.sum);
 ```
 
 ## Dev mock
