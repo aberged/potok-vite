@@ -220,3 +220,7 @@ Razlike u odnosu na potok:
 - **`updateGroupDescription` menja samu aplikaciju.** Opis je HTML aplikacije, pa je ovaj poziv ponovo pokreće. Menja samo opis te aplikacije (podrazumevani ili alternativni). Ne koristi ga za čuvanje stanja.
 - **Limiti:** najviše 200 vrednosti po strani i 5000 za `getGroupDataValues()` bez `limit`. Upisa može biti najviše 30 zaredom, a limit se obnavlja tokom 10 s.
 - **Prava:** upis traži članstvo u grupi, a izmena opisa traži pravo na izmenu grupe.
+
+## Licenca
+
+MIT, vidi [LICENSE](LICENSE).
