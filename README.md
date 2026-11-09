@@ -60,10 +60,10 @@ potok taj HTML stavlja u iframe:
 |---|---|
 | [index.html](index.html) | HTML aplikacije; u build ulazi sadržaj `<body>` |
 | [src/main.ts](src/main.ts) | kod aplikacije (trenutno demo) |
-| [src/style.css](src/style.css) | ulaz za Tailwind |
+| [src/style.css](src/style.css) | ulaz za Tailwind; ne čita dev mock |
 | [src/potok.ts](src/potok.ts) | tipovi potok API-ja (`potok` i `window.potok`) |
 | [src/potok-dev.ts](src/potok-dev.ts) | dev mock API-ja; ne ulazi u build |
-| [vite.config.ts](vite.config.ts) | Tailwind i `potokBuildPlugin` |
+| [vite.config.ts](vite.config.ts) | Tailwind, `potokBuildPlugin` i licence u build-u |
 
 ## Demo
 
@@ -220,6 +220,8 @@ Razlike u odnosu na potok:
 - **`updateGroupDescription` menja samu aplikaciju.** Opis je HTML aplikacije, pa je ovaj poziv ponovo pokreće. Menja samo opis te aplikacije (podrazumevani ili alternativni). Ne koristi ga za čuvanje stanja.
 - **Limiti:** najviše 200 vrednosti po strani i 5000 za `getGroupDataValues()` bez `limit`. Upisa može biti najviše 30 zaredom, a limit se obnavlja tokom 10 s.
 - **Prava:** upis traži članstvo u grupi, a izmena opisa traži pravo na izmenu grupe.
+- **Licence putuju sa build-om.** Na vrh skripte u `potok-build.html` build upisuje pun tekst licence svakog paketa iz `node_modules` koji pakuje (Vite-ov `build.license`). Komentare sa `@license` ili `/*!` iz samog koda zadržava, iako ih Vite pri minifikaciji inače briše. Kod koji ulazi bez napomene dobija je u tvom kodu ili CSS-u: daisyUI-jev CSS iz Tailwind dodatka stiže bez nje, pa aplikacije sa daisyUI-jem imaju `/*! daisyUI | MIT License | https://daisyui.com */` u `style.css`.
+- **Tailwind ne čita dev mock.** `src/style.css` isključuje `potok-dev.ts` (`@source not`). Mock ne ulazi u build, ali bi Tailwind reči iz njega uzeo za klase i dodao ih u CSS build-a.
 
 ## Licenca
 
