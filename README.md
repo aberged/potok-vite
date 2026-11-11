@@ -127,6 +127,7 @@ U kodu aplikacije `potok` je legacy API sa `#group-panel-description`, a `window
 | `listChildren({limit?, beforeId?, from?, to?, aroundId?})` | `{ok: true, groups, has_more, has_newer}`: direktne podgrupe, istim redom i sa istim opcijama kao `listSubgroups` |
 | `getChild(id)` | `{ok: true, group}` sa izvorom opisa; `description` je `null` za grupu koju gledalac ne sme da menja i za aplikaciju |
 | `createChild(attrs)` | `{ok: true, group}`; nova podgrupa, a gledalac postaje njen admin |
+| `createChildren(children, {onExisting?})` | `{ok: true, groups: [{id, key, created}]}`; do 100 podgrupa odjednom, sve ili nijedna (`invalid_group` sa `index`-om one koja ne prolazi), za jedan upis limita. Podgrupa čiji `key` već postoji ne pravi se ponovo (`created: false`), pa se poziv koji je istekao šalje ponovo isti |
 | `updateChild(id, attrs)` | `{ok: true, group}`; menja samo polja koja dobije, a grupu koja je aplikacija odbija sa `forbidden` |
 | `withdrawChild(id)` | `{ok: true, group}`; grupa postaje privatna, prestaje da nasleđuje i nasleđeni članovi izlaze |
 | `previewDescription(text, {descriptionFormat?})` | `{ok: true, html}`: tekst onako kako će ga feed prikazati, prečišćen na serveru |
@@ -160,9 +161,9 @@ Podgrupa iz `listSubgroups` i `listChildren` izgleda ovako: `{id, name, descript
 
 `listChildren`, `getChild`, `createChild`, `updateChild`, `withdrawChild` i `previewDescription` rade u ime gledaoca, pa traže gledaoca koji sme da menja grupu aplikacije (`can_manage_children` iz `getGroup`). Ostali dobijaju `forbidden`. Dosežu samo direktne podgrupe. Pravljenje traži i `create_subgroups` (`can_create_children`), a izmena traži i `edit_group` u samoj podgrupi.
 
-`attrs` su `{name, description, descriptionFormat, isPublic, inheritsMembers, picture}`. Aplikacija ne može da postavi `uses_api` ni bilo šta drugo, i nema poziva za brisanje grupe. `picture` je adresa slike ili `data:` adresa, najviše 1.000.000 znakova, a stiže na `picture_url`, koji ne traži sesiju ni za privatnu grupu.
+`attrs` su `{name, description, descriptionFormat, isPublic, inheritsMembers, picture, lat, lng, pin}`. `lat` i `lng` su mesto na mapi, oba ili nijedno (oba `null` u `updateChild` brišu mesto), a `pin` je ključ iz `pins.icons` iz `getMapConfig`. U `createChildren` svaka podgrupa ima još `key`, ključ aplikacije od 1 do 64 znaka, jedinstven ispod ove grupe i upisan jednom, a `picture` ne ide. Grupe sa ključem su zapisi: vidi ih njihova mapa, a mapa korena i biranje mesta za događaje ne. Aplikacija ne može da postavi `uses_api` ni bilo šta drugo, i nema poziva za brisanje grupe. `picture` je adresa slike ili `data:` adresa, najviše 1.000.000 znakova, a stiže na `picture_url`, koji ne traži sesiju ni za privatnu grupu.
 
-`group` iz `getGroup` izgleda ovako: `{id, name, is_public, inherits_members, parent, can_manage_children, can_create_children, everyone_creates_subgroups, can_start_polls}`, a `parent` je `{id, name, is_public, uses_api}` ili `null` ako gledalac ne vidi tu grupu. `group` iz poziva za podgrupe je podgrupa sa još `{description, description_format, can_edit, member_count, updated_at}`.
+`group` iz `getGroup` izgleda ovako: `{id, name, is_public, inherits_members, parent, can_manage_children, can_create_children, everyone_creates_subgroups, can_start_polls}`, a `parent` je `{id, name, is_public, uses_api}` ili `null` ako gledalac ne vidi tu grupu. `group` iz poziva za podgrupe je podgrupa sa još `{description, description_format, can_edit, member_count, updated_at, key, lat, lng, pin}`.
 
 Primer dve aplikacije na ovim pozivima, od kojih jedna piše ono što druga prikazuje, opisan je u projektu potok-ide, u `docs/feed-i-feedcreator.md`.
 
