@@ -3,4 +3,6 @@
 /* The dev mock is not in the build, but Tailwind would take its words for
    classes and add them to the build's CSS. */
 @source not "./potok-dev.ts";
+/* The API's types, whose words in comments would become classes. */
+@source not "./potok.ts";
 

@@ -113,7 +113,7 @@ U kodu aplikacije `potok` je legacy API sa `#group-panel-description`, a `window
 | `getDescription()`, `updateDescription(html, {descriptionFormat?})` | `{ok: true, group}` za opis ove aplikacije |
 | `listSubgroups(name, {limit?, beforeId?, from?, to?, aroundId?})` | `{ok: true, groups, has_more, has_newer}`: grupe ispod direktne podgrupe sa tačnim imenom `name`, od najnovije, najviše 50 po pozivu (podrazumevano 20). `from` i `to` su trenuci u ISO 8601 sa zonom i ostavljaju grupe objavljene u tom periodu: `from` ulazi u period, a `to` ne ulazi. `aroundId` umesto prve strane daje grupe oko te jedne, ma koliko duboko stajala: do `limit` sa svake strane, a `has_newer` kaže da iznad njih ima još. Grupa koje nema u listi daje prvu stranu, pa proveri da li je `id` u `groups` |
 | `openGroup(id, {tab?})` | `{ok: true}`; vodi gledaoca na roditelja ove grupe, u direktnu podgrupu ili u grupu koju `listSubgroups` može da vrati: u chat, sa `tab: "description"` na opis, gde radi grupa koja je aplikacija, a sa `tab: "settings"` na podešavanja. Aplikacija se gasi sa stranicom |
-| `getGroup()` | `{ok: true, group}`: ova grupa, njen roditelj i šta gledalac tu sme |
+| `getGroup()` | `{ok: true, group}`: ova grupa, njen roditelj i šta gledalac tu sme; `signed_in: false` za gosta |
 | `listPolls({status?, beforeId?})` | `{ok: true, polls, has_more}`: glasanja ove grupe, od najnovijeg, po 30, onoliko koliko njihova pravila pokazuju gledaocu. `status` je `"open"`, `"closed"` ili `"waiting"`, ono u čemu gledalac još može da glasa |
 | `getPoll(id)` | `{ok: true, poll}`; broj koji gledalac ne sme da vidi je `null` |
 | `openPoll(id)` | `{ok: true}`; otvara glasanje u dijalogu Potoka, preko aplikacije, gde gledalac glasa. Aplikacija samo čita: radi za svakog gledaoca, a glas može da bude konačan |
@@ -124,6 +124,7 @@ U kodu aplikacije `potok` je legacy API sa `#group-panel-description`, a `window
 | `shareGroup(id, {inApp?})` | `{ok: true}`; stranica nudi deljenje linka grupe do koje stiže `openGroup`. Frame nema ni Web Share ni clipboard. Sa `inApp: true` link vodi na ovu aplikaciju otvorenu na toj grupi, koja mora da bude ispod nje |
 | `linkGroup(id)` | `{ok: true}`; upisuje grupu u adresu strane (`?at=<id>`), bez novog koraka u istoriji, pa ta adresa otvara aplikaciju baš tu |
 | `getLinkedGroup()` | `{ok: true, group_id}`: grupa iz adrese ili `null`. Niko je ne proverava, to radi `aroundId` |
+| `openLogin()` | `{ok: true}` dok strana odlazi na Potokovu prijavu, koja gosta vraća na istu grupu; bilo gde drugde `unavailable`. Za dugme „Prijavi se“ u aplikaciji, jer frame ne može sam da napusti stranu |
 | `listChildren({limit?, beforeId?, from?, to?, aroundId?})` | `{ok: true, groups, has_more, has_newer}`: direktne podgrupe, istim redom i sa istim opcijama kao `listSubgroups` |
 | `getChild(id)` | `{ok: true, group}` sa izvorom opisa; `description` je `null` za grupu koju gledalac ne sme da menja i za aplikaciju |
 | `createChild(attrs)` | `{ok: true, group}`; nova podgrupa, a gledalac postaje njen admin |
@@ -196,7 +197,7 @@ U `npm run dev` [src/potok-dev.ts](src/potok-dev.ts) pravi `#group-panel-descrip
 - Vrednosti čuva u `localStorage` pod ključem `potok-dev:values`, pa prežive reload. Za reset pokreni `localStorage.removeItem('potok-dev:values')` u konzoli.
 - Paginacija, pretraga i sortiranje rade kao na serveru.
 - Posle upisa šalje novu vrednost svim callback-ovima, i pošiljaocu, kao potok.
-- Trenutni profil je `dev-user`, sa admin pravima.
+- Trenutni profil je `dev-user`, sa admin pravima. `?viewer=reader`, `member`, `outsider` ili `guest` u URL-u glumi drugog gledaoca. Gost nema profil (`getCurrentProfile()` vraća `null`, `getGroup()` ima `signed_in: false` i nijedno pravo), podgrupe dobija bez autora i reakcija, a `openLogin` samo piše u konzolu.
 - Grupe za `listSubgroups` stoje u `localStorage` pod ključem `potok-dev:subgroups`, kao `{"<ime podgrupe>": PotokSubgroup[]}`, a puni ih sama aplikacija u dev-u. `openGroup` i `shareGroup` samo pišu u konzolu, `toggleGroupReaction` menja taj isti ključ, a `pickEmoji` pita preko `prompt`-a.
 - Glasanja stoje pod ključem `potok-dev:polls`, kao `PotokPoll[]`. Potokove forme i glasanja ovde nema: `openPollForm` dodaje glasanje, a `openPoll` glasa za prvi odgovor.
 - Podgrupe aplikacije stoje pod ključem `potok-dev:children`. `potok-dev:group` menja polja koja vraća `getGroup`, na primer `{"can_manage_children": false}` za gledaoca bez prava.
@@ -221,8 +222,9 @@ Razlike u odnosu na potok:
 - **`updateGroupDescription` menja samu aplikaciju.** Opis je HTML aplikacije, pa je ovaj poziv ponovo pokreće. Menja samo opis te aplikacije (podrazumevani ili alternativni). Ne koristi ga za čuvanje stanja.
 - **Limiti:** najviše 200 vrednosti po strani i 5000 za `getGroupDataValues()` bez `limit`. Upisa može biti najviše 30 zaredom, a limit se obnavlja tokom 10 s.
 - **Prava:** upis traži članstvo u grupi, a izmena opisa traži pravo na izmenu grupe.
+- **Gost samo čita.** Javna grupa može da otvori opis i onima bez naloga, i tada aplikacija radi i za njih: `getCurrentProfile()` vraća `null`, a od poziva rade samo oni koji čitaju (podgrupe, mapa, javna glasanja, javna pravila). Umesto dugmeta koje gostu ne radi pokaži „Prijavi se“ sa `openLogin()`. Postojeće grupe zadržavaju kopiju aplikacije sa kojom su napravljene.
 - **Licence putuju sa build-om.** Na vrh skripte u `potok-build.html` build upisuje pun tekst licence svakog paketa iz `node_modules` koji pakuje (Vite-ov `build.license`). Komentare sa `@license` ili `/*!` iz samog koda zadržava, iako ih Vite pri minifikaciji inače briše. Kod koji ulazi bez napomene dobija je u tvom kodu ili CSS-u: daisyUI-jev CSS iz Tailwind dodatka stiže bez nje, pa aplikacije sa daisyUI-jem imaju `/*! daisyUI | MIT License | https://daisyui.com */` u `style.css`.
-- **Tailwind ne čita dev mock.** `src/style.css` isključuje `potok-dev.ts` (`@source not`). Mock ne ulazi u build, ali bi Tailwind reči iz njega uzeo za klase i dodao ih u CSS build-a.
+- **Tailwind ne čita dev mock ni tipove.** `src/style.css` isključuje `potok-dev.ts` i `potok.ts` (`@source not`). Nijedan ne ulazi u build, ali bi Tailwind reči iz njih uzeo za klase i dodao ih u CSS build-a: komentari tipova su tako doneli `.border` i `.rounded`.
 
 ## Licenca
 
