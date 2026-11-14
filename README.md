@@ -56,6 +56,7 @@ potok taj HTML stavlja u iframe:
 | [src/potok.ts](src/potok.ts) | tipovi potok API-ja (`potok` i `window.potok`) |
 | [src/potok-dev.ts](src/potok-dev.ts) | dev mock API-ja; ne ulazi u build |
 | [vite.config.ts](vite.config.ts) | Tailwind i `potokBuildPlugin` |
+| [AGENTS.md](AGENTS.md), [CLAUDE.md](CLAUDE.md) | uputstvo za AI agente; `CLAUDE.md` samo uvozi `AGENTS.md` |
 
 ## Demo
 
