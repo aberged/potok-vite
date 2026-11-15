@@ -219,7 +219,7 @@ Razlike u odnosu na potok:
 - **Sav JS mora biti u jednom fajlu.** Ne koristi dinamički `import()` ni podelu na chunk-ove, jer se objavljuje samo `potok-build.html`.
 - **Slike i fontovi moraju biti inline** (data URL ili SVG u HTML-u) ili sa apsolutnog URL-a. Fajlovi iz `dist/assets` i `public/` se ne objavljuju. Vite sam inline-uje samo asset-e manje od 4 KB (`build.assetsInlineLimit`).
 - **`data` mora biti JSON objekat.** Niz, broj ili tekst server odbija sa `invalid_value`.
-- **Vrednosti se samo dodaju.** API nema izmenu ni brisanje, pa stanje računaj iz svih vrednosti: na primer poslednja vrednost po korisniku, kao u demou, ili zbir.
+- **Vrednosti se uglavnom samo dodaju.** Legacy `potok` nema izmenu ni brisanje, pa stanje računaj iz svih vrednosti: na primer poslednja vrednost po korisniku, kao u demou, ili zbir. U `window.potok` autor menja svoju vrednost sa `updateValue` samo kad pravilo kolekcije to dozvoljava (`edit_own`), a vrednosti brišu samo urednici (`deleteValue`, `deleteValues`).
 - **`updateGroupDescription` menja samu aplikaciju.** Opis je HTML aplikacije, pa je ovaj poziv ponovo pokreće. Menja samo opis te aplikacije (podrazumevani ili alternativni). Ne koristi ga za čuvanje stanja.
 - **Limiti:** najviše 200 vrednosti po strani i 5000 za `getGroupDataValues()` bez `limit`. Upisa može biti najviše 30 zaredom, a limit se obnavlja tokom 10 s.
 - **Prava:** upis traži članstvo u grupi, a izmena opisa traži pravo na izmenu grupe.

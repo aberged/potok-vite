@@ -35,7 +35,7 @@ Kršenje ovih pravila obično prolazi `npm run dev`, pa i `npm run build`, a apl
 - **`potok` i `window.potok` su dva API-ja.** `potok` je legacy (`insertGroupValue`, `getGroupDataValues`...), a `window.potok` noviji SDK (`insertValue`, `listValues`...). U dev mock-u su isti objekat, a u potok-u nisu, pa ne zovi metodu jednog API-ja na drugom.
 - **Listener-i dobijaju `potok.eventListenerOptions`** (`{signal}`), da se uklone kad se aplikacija ponovo učita.
 - **`data` je uvek JSON objekat.** Niz, broj ili tekst server odbija sa `invalid_value`.
-- **Vrednosti se samo dodaju.** Nema izmene ni brisanja, pa stanje računaj iz svih vrednosti.
+- **Vrednosti se uglavnom samo dodaju.** Legacy `potok` nema izmenu ni brisanje, pa stanje računaj iz svih vrednosti. U `window.potok` autor menja svoju vrednost (`updateValue`) samo kad pravilo kolekcije ima `edit_own`, a brišu samo urednici.
 - **`updateGroupDescription` menja i ponovo pokreće samu aplikaciju.** Ne koristi ga za čuvanje stanja.
 - **daisyUI klase** (`btn`, `table`...) rade u potok-u, ali u dev-u nisu stilizovane.
 
