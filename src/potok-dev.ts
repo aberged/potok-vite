@@ -38,6 +38,8 @@ import type {
   PotokReaction,
   PotokRole,
   PotokRule,
+  PotokProcess,
+  PotokProcessGraph,
   PotokScoreCheck,
   PotokSubgroup,
   PotokSubgroupListOptions,
@@ -748,7 +750,55 @@ function devRule(config: PotokConfig | null, collection: string): DevRule {
     under: rule?.under ?? null,
     uploads: rule?.uploads ?? {},
     score: rule?.score ?? null,
+    process: rule?.process ?? null,
   };
+}
+
+// The instances of collections' processes, by value: the mock only starts one
+// with each new value, waits on the graph's task if it has one, and follows
+// decisions, retries and cancels. The steps themselves happen on Potok.
+const devProcesses = new Map<number, PotokProcess & { collection: string; role: string | null }>();
+
+const processRefused: PotokError = { ok: false, error: 'forbidden', message: 'Your roles in this group do not allow that.' };
+
+// Where the mock leaves an instance once there is nothing to wait on: the
+// graph's end, as it runs none of the steps in between.
+const devProcessEnd = (graph: PotokProcessGraph | undefined) =>
+  graph?.nodes.find((node) => node.type === 'endEvent')?.id ?? 'end';
+
+function startDevProcess(collection: string, valueId: number, rule: DevRule) {
+  const graph = rule.process?.graph;
+  if (!graph) return;
+
+  const task = graph.nodes.find((node) => node.type === 'userTask');
+  const id = devProcesses.size + 1;
+
+  devProcesses.set(valueId, {
+    id,
+    value_id: valueId,
+    collection,
+    role: task && task.type === 'userTask' ? task.role : null,
+    status: task ? 'waiting' : 'done',
+    element: task ? task.id : devProcessEnd(graph),
+    wake_at: null,
+    error: null,
+    groups: {},
+    task: null,
+    log: [],
+  });
+
+  setTimeout(() => deliverChange({ event: 'process', collection, id }));
+}
+
+function presentDevProcess(instance: PotokProcess & { collection: string; role: string | null }, graph: PotokRule['process']): PotokProcess {
+  const node = graph?.graph?.nodes.find((entry) => entry.id === instance.element);
+  const task =
+    instance.status === 'waiting' && node && node.type === 'userTask'
+      ? { element: node.id, outcomes: node.outcomes, deadline_at: null, can_complete: onList([node.role]) }
+      : null;
+  const { collection: _collection, role: _role, ...shown } = instance;
+
+  return { ...shown, task };
 }
 
 const ruleOpen = (rule: DevRule) => rule.open && (!rule.closes_at || Date.now() < Date.parse(rule.closes_at));
@@ -1825,6 +1875,7 @@ function createServer(el: HTMLElement) {
 
       const value = this.present(row as PotokCollectionValue, rule, key);
       setTimeout(() => deliverChange({ event: 'created', collection, value }));
+      startDevProcess(collection, row.id, rule);
       return { ok: true, value };
     },
 
@@ -2170,6 +2221,66 @@ function createSdk(server: DevServer): PotokSdk {
 
     uploadImage(file, options = {}) {
       return server.sendFile(file, null, '_image', options.onProgress);
+    },
+
+    async listProcesses(collection, options = {}) {
+      const rule = devRule(loadConfig(), collection);
+      const ids = options.ids ?? null;
+      const processes = [...devProcesses.values()]
+        .filter((instance) => instance.collection === collection && (!ids || ids.includes(instance.value_id)))
+        .sort((a, b) => b.id - a.id)
+        .map((instance) => presentDevProcess(instance, rule.process));
+
+      return { ok: true, processes };
+    },
+
+    async completeTask(id, element, outcome, options = {}) {
+      const instance = [...devProcesses.values()].find((entry) => entry.id === id);
+      if (!instance) return { ok: false, error: 'not_found' };
+
+      const rule = devRule(loadConfig(), instance.collection);
+      const shown = presentDevProcess(instance, rule.process);
+
+      if (!shown.task || shown.task.element !== element) return { ok: false, error: 'not_waiting' };
+      if (!shown.task.outcomes.includes(outcome)) return { ok: false, error: 'invalid_outcome' };
+      if (!shown.task.can_complete) return processRefused;
+
+      instance.status = 'done';
+      instance.element = devProcessEnd(rule.process?.graph);
+      instance.log = [
+        ...instance.log,
+        {
+          at: timestamp(),
+          element,
+          outcome,
+          comment: options.comment?.trim() || null,
+          by: { id: viewerId ?? 0, username: `dev-${devViewer}` },
+        },
+      ];
+
+      setTimeout(() => deliverChange({ event: 'process', collection: instance.collection, id }));
+      return { ok: true, process: presentDevProcess(instance, rule.process) };
+    },
+
+    async retryProcess(id) {
+      const instance = [...devProcesses.values()].find((entry) => entry.id === id);
+      if (!viewerManages) return processRefused;
+      if (!instance) return { ok: false, error: 'not_found' };
+      if (instance.status !== 'failed') return { ok: false, error: 'not_failed' };
+
+      instance.status = 'running';
+      instance.error = null;
+      return { ok: true, process: presentDevProcess(instance, devRule(loadConfig(), instance.collection).process) };
+    },
+
+    async cancelProcess(id) {
+      const instance = [...devProcesses.values()].find((entry) => entry.id === id);
+      if (!viewerManages) return processRefused;
+      if (!instance) return { ok: false, error: 'not_found' };
+      if (instance.status !== 'running' && instance.status !== 'waiting') return { ok: false, error: 'not_running' };
+
+      instance.status = 'cancelled';
+      return { ok: true, process: presentDevProcess(instance, devRule(loadConfig(), instance.collection).process) };
     },
 
     onValues(listener, options = {}) {
