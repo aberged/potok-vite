@@ -43,6 +43,7 @@ import type {
   PotokSubgroupListOptions,
   PotokSubgroupPage,
   PotokSummary,
+  PotokTask,
   PotokUploadedFile,
   PotokValue,
   PotokValueChange,
@@ -151,6 +152,46 @@ function deliverNewValue(value: PotokValue) {
 }
 
 const pollListeners = new Set<(id: number) => void>();
+const waitingListeners = new Set<() => void>();
+
+// What waits for the dev viewer: one form and one decision, until each is done.
+let devTasks: PotokTask[] = [
+  {
+    id: 9001,
+    process: { id: 1, name: 'Dev form' },
+    element: 'form_1',
+    label: 'Kvar',
+    kind: 'form',
+    title: null,
+    text: 'The lift is stuck',
+    deadline_at: null,
+    outcomes: [],
+    attributes: [
+      { name: 'naslov', type: 'text', list: false, required: true },
+      { name: 'sprat', type: 'number', list: false, required: false },
+    ],
+    started_by_viewer: true,
+  },
+  {
+    id: 9002,
+    process: { id: 2, name: 'Dev decision' },
+    element: 'task_1',
+    label: 'Approve',
+    kind: 'decision',
+    title: 'Budget',
+    text: null,
+    deadline_at: null,
+    outcomes: ['yes', 'no'],
+    attributes: [],
+    started_by_viewer: false,
+  },
+];
+
+// A task is done: it leaves the list, and the app hears of it.
+function finishDevTask(id: number) {
+  devTasks = devTasks.filter((task) => task.id !== id);
+  setTimeout(() => waitingListeners.forEach((listener) => listener()));
+}
 const subgroupListeners = new Set<() => void>();
 const sheetListeners = new Set<(id: number) => void>();
 
@@ -2274,6 +2315,51 @@ function createSdk(server: DevServer): PotokSdk {
 
     async openPollForm() {
       return server.openPollForm();
+    },
+
+    // A form opens in Potok's dialog: here it is filled in at once.
+    async listWaiting() {
+      return { ok: true as const, tasks: devTasks };
+    },
+
+    async openProcessForm(id) {
+      if (!devTasks.some((task) => task.id === id && task.kind === 'form')) {
+        return { ok: false, error: 'not_found' };
+      }
+
+      finishDevTask(id);
+      return { ok: true as const };
+    },
+
+    async completeTask(id, _element, outcome) {
+      const task = devTasks.find((row) => row.id === id && row.kind === 'decision');
+      if (!task || !task.outcomes.includes(outcome)) return { ok: false, error: 'not_found' };
+
+      finishDevTask(id);
+      return { ok: true as const };
+    },
+
+    async listStartable() {
+      return {
+        ok: true as const,
+        processes: [
+          {
+            id: 3,
+            name: 'Dev start',
+            takes: 'entity' as const,
+            attributes: [{ name: 'naslov', type: 'text' as const, list: false, required: true }],
+          },
+        ],
+      };
+    },
+
+    async openProcessStart(id) {
+      return id === 3 ? { ok: true as const } : { ok: false, error: 'not_found' };
+    },
+
+    onWaiting(listener) {
+      waitingListeners.add(listener);
+      return () => waitingListeners.delete(listener);
     },
 
     onPollChange(listener) {

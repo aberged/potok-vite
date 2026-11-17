@@ -737,6 +737,46 @@ export type PotokPoll = {
   options: PotokPollOption[];
 };
 
+/** An attribute of an entity a process drawn in the group asks for. */
+export type PotokAttribute = {
+  name: string;
+  type: "text" | "number" | "boolean" | "date" | "datetime" | "choice" | "entity";
+  /** A list of what the type says, a row per item in Potok's form. */
+  list: boolean;
+  required: boolean;
+  /** The choices of a `choice`. */
+  options?: string[];
+  /** The id of the entity an `entity` holds. */
+  entity?: number;
+};
+
+/** What waits for the viewer in the group (`listWaiting`). */
+export type PotokTask = {
+  /** The run that waits: `openProcessForm` and `completeTask` take it. */
+  id: number;
+  process: { id: number; name: string };
+  element: string;
+  label: string;
+  /** A form to fill in (`attributes`) or a decision (`outcomes`). */
+  kind: "form" | "decision";
+  title: string | null;
+  text: string | null;
+  deadline_at: string | null;
+  outcomes: string[];
+  attributes: PotokAttribute[];
+  /** Whether the viewer started the run it waits in. */
+  started_by_viewer: boolean;
+};
+
+/** A process drawn in the group the viewer may start by hand (`listStartable`). */
+export type PotokStartable = {
+  id: number;
+  name: string;
+  /** The attributes of an entity, or a title and a text. */
+  takes: "entity" | "text";
+  attributes: PotokAttribute[];
+};
+
 export type PotokPollListOptions = {
   /** "waiting" holds those the viewer can still vote in, without paging. */
   status?: "open" | "closed" | "waiting";
@@ -918,6 +958,40 @@ export type PotokSdk = {
    * function that removes the listener.
    */
   onPollChange(listener: (id: number) => void): () => void;
+  /**
+   * What waits for the viewer in the group, of the processes its editors draw
+   * in Potok: a form to fill in or a decision, the nearest deadline first.
+   * Members only.
+   */
+  listWaiting(): Promise<{ ok: true; tasks: PotokTask[] } | PotokError>;
+  /**
+   * Opens Potok's dialog of a form that waits for the viewer, over the app. An
+   * app reads a form and never fills one in. In a sheet over another page:
+   * `not_here`.
+   */
+  openProcessForm(id: number): Promise<{ ok: true } | PotokError>;
+  /** Finishes a decision the run `id` waits on at `element`, picking `outcome`. */
+  completeTask(
+    id: number,
+    element: string,
+    outcome: string,
+    options?: { comment?: string },
+  ): Promise<{ ok: true } | PotokError>;
+  /** The processes drawn in the group the viewer may start by hand. */
+  listStartable(): Promise<{ ok: true; processes: PotokStartable[] } | PotokError>;
+  /**
+   * Opens Potok's Start dialog of one, over the app, with `prefill` (by
+   * attribute, or `title` and `text`) written in for the viewer to change.
+   */
+  openProcessStart(
+    id: number,
+    options?: { prefill?: Record<string, unknown> },
+  ): Promise<{ ok: true } | PotokError>;
+  /**
+   * Gets word when what waits for the viewer changed: read it again with
+   * `listWaiting`. Returns a function that removes the listener.
+   */
+  onWaiting(listener: () => void): () => void;
   /**
    * Gets every new value of this app, also the viewer's own; with
    * `{scope: "group"}` also those of the group's other apps. Returns a
