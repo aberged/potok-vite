@@ -259,8 +259,18 @@ export type PotokProcessNode = { id: string; label?: string } & (
   | { type: "startEvent" | "endEvent" | "exclusiveGateway" }
   /** Writes `text` into the app's group (`in: "app"`, the default) or a sub-group an element of the instance made (`in`: its id); needs `post_values`. */
   | { type: "serviceTask"; action: "message"; text: string; in?: string }
-  /** Makes a sub-group called `name`; `admins` are role keys, "owner" and "triggered_by" (the last two by default); needs `create_subgroups`. */
-  | { type: "serviceTask"; action: "subgroup"; name: string; admins?: string[] }
+  /**
+   * Makes a sub-group called `name`; `admins` are role keys, "owner" and "triggered_by" (the last two by default); needs `create_subgroups`.
+   * With `inherits` it inherits the members of the app's group, all of them or, with `inherit_roles`, only the holders of those roles.
+   */
+  | {
+      type: "serviceTask";
+      action: "subgroup";
+      name: string;
+      admins?: string[];
+      inherits?: boolean;
+      inherit_roles?: PotokRoleKey[];
+    }
   /** Sends `text` (at most 240 characters) to the people of `role`, as a mention of the role would; needs `mention_roles`. */
   | { type: "serviceTask"; action: "push"; role: PotokRoleKey; text: string }
   /** Waits for someone holding `role` to pick one of `outcomes` (at most 10), until an optional `deadline`. */
