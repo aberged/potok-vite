@@ -2,7 +2,7 @@
 
 Šablon za pravljenje **potok aplikacija** uz Vite, TypeScript i Tailwind.
 
-Potok aplikacija je HTML koji se nalepi kao opis grupe sa uključenom opcijom „Koristi API“. potok je pokreće u sandboxed iframe-u i daje joj API za čitanje i upis podataka grupe.
+Potok aplikacija je HTML koji se otprema kao opis grupe sa uključenom opcijom „Opis je aplikacija (API)“. potok je pokreće u sandboxed iframe-u i daje joj API za čitanje i upis podataka grupe.
 
 Opis može biti podrazumevani ili jedan od alternativnih opisa grupe, pa grupa može imati više aplikacija, svaku sa svojim podacima.
 
@@ -17,12 +17,12 @@ npm run build    # tsc + vite build → dist/potok-build.html
 Objavljivanje:
 
 1. Pokreni `npm run build`.
-2. U potok-u otvori grupu, pa **Izmeni grupu** i uključi **Koristi API**.
-3. U polje **Opis** nalepi ceo sadržaj `dist/potok-build.html` i sačuvaj.
+2. U potok-u otvori grupu, pa **Uredi grupu**, i na kartici **Opis** uključi **Opis je aplikacija (API)**.
+3. Klikni **Otpremi ZIP**, izaberi `dist/potok-build.html` (ili ZIP u kome je samo on) i klikni **Sačuvaj izmene**.
 
-Za alternativni opis: u **Izmeni grupu**, pod **Alternativni opisi**, klikni **Novi opis**. Upiši ime, uključi **Koristi API**, nalepi `dist/potok-build.html` u opis i klikni **Sačuvaj opis**.
+Za alternativni opis: u **Uredi grupu**, pod **Alternativni opisi**, klikni **Novi opis**. Upiši ime, uključi **Opis je aplikacija (API)**, otpremi `dist/potok-build.html` dugmetom **Otpremi ZIP** i klikni **Sačuvaj opis**.
 
-Pregled u formi za izmenu prikazuje aplikaciju, ali odbija API pozive (greška `preview`). Pravi rad se vidi tek na stranici grupe.
+Fajl ostaje u pregledaču: potok ga raspakuje i u opis upisuje samo HTML. **Preuzmi ZIP** vraća ono što je trenutno u opisu, kao `index.html` u ZIP-u. Forma za izmenu ne pokreće aplikaciju, pa se ona vidi tek na stranici grupe.
 
 ## Kako radi
 

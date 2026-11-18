@@ -4,7 +4,7 @@ Uputstvo za AI agente koji rade u ovom repou. Detalji API-ja, limiti i dev mock 
 
 ## Šta je ovo
 
-Šablon za potok aplikaciju: Vite, TypeScript i Tailwind. `npm run build` pravi jedan fajl, `dist/potok-build.html`, koji se nalepi u opis potok grupe. potok ga pokreće u sandboxed iframe-u, bez `allow-same-origin`.
+Šablon za potok aplikaciju: Vite, TypeScript i Tailwind. `npm run build` pravi jedan fajl, `dist/potok-build.html`, koji se otprema u opis potok grupe (Uredi grupu, Opis, **Otpremi ZIP**). potok ga pokreće u sandboxed iframe-u, bez `allow-same-origin`.
 
 ## Komande
 
