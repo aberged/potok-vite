@@ -43,6 +43,7 @@ import type {
   PotokSdk,
   PotokReaction,
   PotokRole,
+  PotokRoleKey,
   PotokRule,
   PotokScoreCheck,
   PotokSubgroup,
@@ -489,6 +490,7 @@ function loadOwnGroup(): PotokOwnGroup {
     name: 'dev-group',
     is_public: false,
     inherits_members: false,
+    inherit_role_keys: [],
     parent: null,
     can_manage_children: true,
     can_create_children: true,
@@ -1637,8 +1639,21 @@ function createServer(el: HTMLElement) {
     return typeof pin === 'string' && (icons.length === 0 || icons.includes(pin));
   };
 
+  // As in potok: the roles of this group, "everyone" taking every member.
+  const validRoleKeys = (keys: PotokRoleKey[] | null | undefined) =>
+    keys === undefined ||
+    keys === null ||
+    (Array.isArray(keys) &&
+      keys.every((key) => key === '' || devRoles.some((role) => role.key === key)));
+
+  const roleKeys = (keys: PotokRoleKey[] | null | undefined): PotokRoleKey[] => {
+    const picked = [...new Set((keys ?? []).filter((key) => key !== ''))];
+    return picked.includes('everyone') ? [] : picked.sort();
+  };
+
   const validAttrs = (attrs: PotokChildAttrs, nulls = true) =>
     (attrs.name === undefined || (attrs.name.trim() !== '' && attrs.name.length <= MAX_GROUP_NAME_LENGTH)) &&
+    validRoleKeys(attrs.inheritRoleKeys) &&
     (attrs.picture === undefined || attrs.picture.length <= MAX_PICTURE_LENGTH) &&
     validPlace(attrs.lat, attrs.lng, nulls) &&
     validPin(attrs.pin);
@@ -1659,6 +1674,7 @@ function createServer(el: HTMLElement) {
       description_html: devDescriptionHtml(description, format),
       is_public: attrs.isPublic ?? child.is_public,
       inherits_members: inherits,
+      inherit_role_keys: inherits ? roleKeys(attrs.inheritRoleKeys ?? child.inherit_role_keys) : [],
       picture_url: attrs.picture === '' ? devPicture(child.id) : (attrs.picture ?? child.picture_url),
       member_count: inherits ? 1 + DEV_INHERITED_MEMBERS : child.member_count,
       lat: placed ? (attrs.lat === null ? null : round6(attrs.lat as number)) : child.lat,
@@ -1698,6 +1714,7 @@ function createServer(el: HTMLElement) {
       description: '',
       description_format: 'markdown',
       can_edit: true,
+      inherit_role_keys: [],
       member_count: 1,
       updated_at: now,
       key,
@@ -2081,6 +2098,7 @@ function createServer(el: HTMLElement) {
         ...child,
         is_public: false,
         inherits_members: false,
+        inherit_role_keys: [],
         published_at: null,
         member_count: 1,
         updated_at: timestamp(),

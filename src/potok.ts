@@ -545,6 +545,8 @@ export type PotokChild = PotokSubgroup & {
   description: string | null;
   description_format: PotokContentFormat;
   can_edit: boolean;
+  /** The roles of the app's group its members are inherited by; empty for all of them, or when it does not inherit. */
+  inherit_role_keys: PotokRoleKey[];
   member_count: number;
   updated_at: string;
   /** The app's own key, given by `createChildren`; null for a group made otherwise. */
@@ -563,6 +565,15 @@ export type PotokChildAttrs = {
   descriptionFormat?: PotokContentFormat;
   isPublic?: boolean;
   inheritsMembers?: boolean;
+  /**
+   * With `inheritsMembers`: only the members of the app's group who hold one
+   * of these roles there come in (keys from `listRoles`), with all their
+   * roles, and they leave on losing the last of them. Empty or "everyone"
+   * takes every member; a key the group has not is refused (`invalid_group`).
+   * Narrowing it in `updateChild` sends away whoever no longer fits, except
+   * the viewer.
+   */
+  inheritRoleKeys?: PotokRoleKey[];
   /** An image URL or a `data:` URL, at most 1,000,000 characters. */
   picture?: string;
   /**
@@ -604,6 +615,8 @@ export type PotokOwnGroup = {
   name: string;
   is_public: boolean;
   inherits_members: boolean;
+  /** The parent's roles it inherits members by; empty for all of them. */
+  inherit_role_keys: PotokRoleKey[];
   /** null for a viewer who cannot see that group. */
   parent: { id: number; name: string; is_public: boolean; uses_api: boolean } | null;
   /** The viewer may keep the sub-groups: they hold `edit_group` here. */
