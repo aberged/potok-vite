@@ -33,18 +33,23 @@ import type {
   PotokPlaceShape,
   PotokPoll,
   PotokPollListOptions,
+  PotokProcess,
+  PotokProcessCondition,
+  PotokProcessFlow,
+  PotokProcessGraph,
+  PotokProcessNode,
+  PotokProcessWarning,
   PotokProfile,
   PotokSdk,
   PotokReaction,
   PotokRole,
   PotokRule,
-  PotokProcess,
-  PotokProcessGraph,
   PotokScoreCheck,
   PotokSubgroup,
   PotokSubgroupListOptions,
   PotokSubgroupPage,
   PotokSummary,
+  PotokTask,
   PotokUploadedFile,
   PotokValue,
   PotokValueChange,
@@ -85,7 +90,8 @@ import type {
 //
 // Collections (`getConfig`, `insertValue` with a collection, ...) follow the
 // rules of the app's config like the server does, for the viewer `?viewer=`
-// plays: see "Collections and rules" below.
+// plays: see "Collections and rules" below. A rule's process runs its graph
+// in the page: see "Processes of the app's collections" below.
 
 const VALUES_STORAGE_KEY = 'potok-dev:values';
 const SUBGROUPS_STORAGE_KEY = 'potok-dev:subgroups';
@@ -153,6 +159,46 @@ function deliverNewValue(value: PotokValue) {
 }
 
 const pollListeners = new Set<(id: number) => void>();
+const waitingListeners = new Set<() => void>();
+
+// What waits for the dev viewer: one form and one decision, until each is done.
+let devTasks: PotokTask[] = [
+  {
+    id: 9001,
+    process: { id: 1, name: 'Dev form' },
+    element: 'form_1',
+    label: 'Kvar',
+    kind: 'form',
+    title: null,
+    text: 'The lift is stuck',
+    deadline_at: null,
+    outcomes: [],
+    attributes: [
+      { name: 'naslov', type: 'text', list: false, required: true },
+      { name: 'sprat', type: 'number', list: false, required: false },
+    ],
+    started_by_viewer: true,
+  },
+  {
+    id: 9002,
+    process: { id: 2, name: 'Dev decision' },
+    element: 'task_1',
+    label: 'Approve',
+    kind: 'decision',
+    title: 'Budget',
+    text: null,
+    deadline_at: null,
+    outcomes: ['yes', 'no'],
+    attributes: [],
+    started_by_viewer: false,
+  },
+];
+
+// A task is done: it leaves the list, and the app hears of it.
+function finishDevTask(id: number) {
+  devTasks = devTasks.filter((task) => task.id !== id);
+  setTimeout(() => waitingListeners.forEach((listener) => listener()));
+}
 const subgroupListeners = new Set<() => void>();
 const sheetListeners = new Set<(id: number) => void>();
 
@@ -754,53 +800,6 @@ function devRule(config: PotokConfig | null, collection: string): DevRule {
   };
 }
 
-// The instances of collections' processes, by value: the mock only starts one
-// with each new value, waits on the graph's task if it has one, and follows
-// decisions, retries and cancels. The steps themselves happen on Potok.
-const devProcesses = new Map<number, PotokProcess & { collection: string; role: string | null }>();
-
-const processRefused: PotokError = { ok: false, error: 'forbidden', message: 'Your roles in this group do not allow that.' };
-
-// Where the mock leaves an instance once there is nothing to wait on: the
-// graph's end, as it runs none of the steps in between.
-const devProcessEnd = (graph: PotokProcessGraph | undefined) =>
-  graph?.nodes.find((node) => node.type === 'endEvent')?.id ?? 'end';
-
-function startDevProcess(collection: string, valueId: number, rule: DevRule) {
-  const graph = rule.process?.graph;
-  if (!graph) return;
-
-  const task = graph.nodes.find((node) => node.type === 'userTask');
-  const id = devProcesses.size + 1;
-
-  devProcesses.set(valueId, {
-    id,
-    value_id: valueId,
-    collection,
-    role: task && task.type === 'userTask' ? task.role : null,
-    status: task ? 'waiting' : 'done',
-    element: task ? task.id : devProcessEnd(graph),
-    wake_at: null,
-    error: null,
-    groups: {},
-    task: null,
-    log: [],
-  });
-
-  setTimeout(() => deliverChange({ event: 'process', collection, id }));
-}
-
-function presentDevProcess(instance: PotokProcess & { collection: string; role: string | null }, graph: PotokRule['process']): PotokProcess {
-  const node = graph?.graph?.nodes.find((entry) => entry.id === instance.element);
-  const task =
-    instance.status === 'waiting' && node && node.type === 'userTask'
-      ? { element: node.id, outcomes: node.outcomes, deadline_at: null, can_complete: onList([node.role]) }
-      : null;
-  const { collection: _collection, role: _role, ...shown } = instance;
-
-  return { ...shown, task };
-}
-
 const ruleOpen = (rule: DevRule) => rule.open && (!rule.closes_at || Date.now() < Date.parse(rule.closes_at));
 const rulePublic = (rule: DevRule, group: PotokOwnGroup) => rule.public && group.is_public;
 const fullReader = (rule: DevRule) => viewerManages || (viewerMember && onList(rule.read));
@@ -957,7 +956,558 @@ function deliverChange(change: PotokValueChange) {
   });
 }
 
-type DevFile = PotokUploadedFile & { blob: Blob; collection: string | null; slot: string; response: number | null; sender: number | null };
+// --- Processes of the app's collections (Processes, Engine, Processes.Graph) ---
+//
+// A rule's `process` with a `graph` starts an instance for each new value of
+// its collection. Instances are kept in `potok-dev:processes` and run in the
+// page. A service task only says on the console what Potok would do (a
+// sub-group it makes gets a made-up id), and a message whose text comes out
+// empty fails the instance with `empty_text`, as in Potok, so that
+// `retryProcess` has something to take up. Timers and deadlines wake an
+// instance while the page stays open, or at the next call. `saveConfig`
+// checks a graph's shape and roles as Potok does, but not every limit.
+
+const PROCESSES_STORAGE_KEY = 'potok-dev:processes';
+const MAX_PROCESS_LIST = 100;
+const MAX_PROCESS_STEPS = 5_000;
+const MAX_PROCESS_NAME = 60;
+const MAX_PROCESS_COMMENT = 1_000;
+const MAX_TIMEOUT_MS = 2_147_483_647;
+const PROCESS_ID_FORMAT = /^[a-z][a-z0-9_-]{0,39}$/;
+const PROCESS_FIELD_FORMAT = /^[\p{L}\p{Nd}_.-]{1,64}$/u;
+const PROCESS_PLACEHOLDER = /\{\{\s*([\p{L}\p{Nd}_.-]+)\s*\}\}/gu;
+const PROCESS_DURATION = /^P(?:(\d+)W|(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?)$/;
+const DEFAULT_SUBGROUP_ADMINS = ['owner', 'triggered_by'];
+
+type DevInstance = {
+  id: number;
+  /** The app, as `description_id`. */
+  app: number | null;
+  collection: string;
+  value_id: number;
+  /** The value's author, who sees the instance without reading the collection in full. */
+  creator_id: number | null;
+  status: PotokProcess['status'];
+  element: string;
+  wake_at: string | null;
+  error: PotokProcess['error'];
+  groups: Record<string, number>;
+  log: { at: string; element: string; outcome: string; comment: string | null; by: number }[];
+  /** A task's decision, read by the texts and conditions after it as `{{task.outcome}}`. */
+  results: Record<string, { outcome: string; comment: string | null; by: string | null }>;
+  steps: number;
+  /** The graph it started with: a rule saved later changes only the instances after it. */
+  graph: PotokProcessGraph;
+};
+
+const viewerNames = new Map(
+  (Object.entries(viewerIds) as [DevViewer, number | null][]).map(([name, id]) => [id, `dev-${name}`]),
+);
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+function loadInstances(): DevInstance[] {
+  try {
+    const stored: unknown = JSON.parse(localStorage.getItem(PROCESSES_STORAGE_KEY) || '[]');
+    return Array.isArray(stored) ? stored : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveInstances(instances: DevInstance[]) {
+  localStorage.setItem(PROCESSES_STORAGE_KEY, JSON.stringify(instances));
+}
+
+function durationSeconds(duration: unknown): number | null {
+  const match = typeof duration === 'string' ? PROCESS_DURATION.exec(duration) : null;
+  if (!match) return null;
+
+  const [weeks, days, hours, minutes] = match.slice(1).map((part) => Number(part ?? 0));
+  return weeks * 604_800 + days * 86_400 + hours * 3_600 + minutes * 60;
+}
+
+function validDuration(duration: unknown): boolean {
+  const seconds = durationSeconds(duration);
+  return seconds !== null && seconds >= 60 && seconds <= 366 * 24 * 3_600;
+}
+
+const later = (duration: string) =>
+  new Date(Date.now() + (durationSeconds(duration) ?? 0) * 1000).toISOString().replace(/\.\d+Z$/, 'Z');
+
+// Processes.Legacy: a field is a path of names with dots between them.
+function processField(data: unknown, path: string): unknown {
+  return path.split('.').reduce<unknown>((acc, key) => (isRecord(acc) ? acc[key] : undefined), data);
+}
+
+const processText = (value: unknown) =>
+  typeof value === 'string' ? value : typeof value === 'number' || typeof value === 'boolean' ? String(value) : '';
+
+function processNumber(value: unknown): number | null {
+  if (typeof value === 'number') return value;
+  if (typeof value !== 'string' || !/^[+-]?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(value.trim())) return null;
+  return Number(value.trim());
+}
+
+const renderProcessText = (text: string, data: PotokData) =>
+  text.replace(PROCESS_PLACEHOLDER, (_whole, field: string) => processText(processField(data, field))).trim();
+
+function conditionHolds(condition: PotokProcessCondition, data: PotokData): boolean {
+  const actual = processField(data, condition.field);
+
+  if (condition.op === 'empty') {
+    return (
+      actual === null ||
+      actual === undefined ||
+      (typeof actual === 'string' && actual.trim() === '') ||
+      (Array.isArray(actual) && actual.length === 0) ||
+      (isRecord(actual) && Object.keys(actual).length === 0)
+    );
+  }
+
+  const a = processNumber(actual);
+  const b = processNumber(condition.value);
+  const same =
+    a !== null && b !== null ? a === b : processText(actual).trim() === processText(condition.value).trim();
+
+  switch (condition.op) {
+    case '=':
+      return same;
+    case '!=':
+      return !same;
+    case '<':
+      return a !== null && b !== null && a < b;
+    case '>':
+      return a !== null && b !== null && a > b;
+  }
+}
+
+const plainFlow = (flow: PotokProcessFlow) =>
+  flow.outcome === undefined && flow.deadline === undefined && flow.condition === undefined && flow.default === undefined;
+
+const nodeOf = (graph: PotokProcessGraph, id: string) => graph.nodes.find((node) => node.id === id);
+const flowsOut = (graph: PotokProcessGraph, id: string) => graph.flows.filter((flow) => flow.from === id);
+
+// Processes.Graph.normalize/2 and unknown_role/2, in short: what each element
+// takes, a shape an instance can finish, and roles the group has. Gives the
+// path counted from the graph and the reason, or null.
+function graphProblem(graph: unknown): [string, string] | null {
+  if (!isRecord(graph) || !Array.isArray(graph.nodes) || !Array.isArray(graph.flows)) return ['', 'invalid'];
+  if (graph.nodes.length === 0) return ['nodes', 'empty'];
+  if (graph.nodes.length > 100) return ['nodes', 'too_many'];
+  if (graph.flows.length > 200) return ['flows', 'too_many'];
+
+  for (const [i, node] of graph.nodes.entries()) {
+    const problem = elementProblem(node, `nodes.${i}`);
+    if (problem) return problem;
+  }
+
+  const nodes = graph.nodes as PotokProcessNode[];
+  const ids = new Set<string>();
+
+  for (const [i, node] of nodes.entries()) {
+    if (ids.has(node.id)) return [`nodes.${i}.id`, 'duplicate'];
+    ids.add(node.id);
+  }
+
+  for (const [i, flow] of graph.flows.entries()) {
+    const problem = flowProblem(flow, `flows.${i}`, ids);
+    if (problem) return problem;
+  }
+
+  const flows = graph.flows as PotokProcessFlow[];
+  const starts = nodes.flatMap((node, i) => (node.type === 'startEvent' ? [i] : []));
+  if (starts.length === 0) return ['nodes', 'no_start'];
+  if (starts.length > 1) return [`nodes.${starts[1]}`, 'second_start'];
+  if (!nodes.some((node) => node.type === 'endEvent')) return ['nodes', 'no_end'];
+
+  for (const [i, node] of nodes.entries()) {
+    const problem = leavingProblem(node, `nodes.${i}`, flows);
+    if (problem) return problem;
+  }
+
+  for (const [i, node] of nodes.entries()) {
+    if (node.type !== 'serviceTask' || node.action !== 'message' || (node.in ?? 'app') === 'app') continue;
+    if (!nodes.some((other) => other.id === node.in && other.type === 'serviceTask' && other.action === 'subgroup')) {
+      return [`nodes.${i}.in`, 'unknown'];
+    }
+  }
+
+  const walk = (from: string[], next: (id: string) => string[]) => {
+    const seen = new Set(from);
+    const queue = [...from];
+
+    while (queue.length > 0) {
+      next(queue.pop()!).forEach((id) => {
+        if (!seen.has(id)) {
+          seen.add(id);
+          queue.push(id);
+        }
+      });
+    }
+
+    return seen;
+  };
+
+  const reached = walk([nodes[starts[0]].id], (id) => flowsOut({ nodes, flows }, id).map((flow) => flow.to));
+  const unreached = nodes.findIndex((node) => !reached.has(node.id));
+  if (unreached >= 0) return [`nodes.${unreached}`, 'unreachable'];
+
+  const ends = nodes.filter((node) => node.type === 'endEvent').map((node) => node.id);
+  const finishing = walk(ends, (id) => flows.filter((flow) => flow.to === id).map((flow) => flow.from));
+  const stuck = nodes.findIndex((node) => !finishing.has(node.id));
+  if (stuck >= 0) return [`nodes.${stuck}`, 'dead_end'];
+
+  const keys = new Set(devRoles.map((role) => role.key));
+
+  for (const [i, node] of nodes.entries()) {
+    if ((node.type === 'userTask' || (node.type === 'serviceTask' && node.action === 'push')) && !keys.has(node.role)) {
+      return [`nodes.${i}.role`, 'unknown_role'];
+    }
+
+    if (node.type === 'serviceTask' && node.action === 'subgroup') {
+      const j = (node.admins ?? []).findIndex((key) => !DEFAULT_SUBGROUP_ADMINS.includes(key) && !keys.has(key));
+      if (j >= 0) return [`nodes.${i}.admins.${j}`, 'unknown_role'];
+    }
+  }
+
+  return null;
+}
+
+const textProblem = (text: unknown, max: number, path: string): [string, string] | null =>
+  typeof text === 'string' && text.trim().length >= 1 && text.trim().length <= max ? null : [path, 'invalid'];
+
+const keyProblem = (key: unknown, path: string): [string, string] | null =>
+  typeof key === 'string' && key.length >= 1 && key.length <= 64 ? null : [path, 'invalid'];
+
+function elementProblem(node: unknown, path: string): [string, string] | null {
+  if (!isRecord(node) || typeof node.id !== 'string' || !PROCESS_ID_FORMAT.test(node.id)) return [path, 'invalid'];
+  if (node.label !== undefined && node.label !== null && textProblem(node.label, 60, '')) return [`${path}.label`, 'invalid'];
+
+  const deadline = () =>
+    node.deadline === undefined || node.deadline === null || validDuration(node.deadline) ? null : [`${path}.deadline`, 'invalid'] as [string, string];
+
+  switch (node.type) {
+    case 'startEvent':
+    case 'endEvent':
+    case 'exclusiveGateway':
+      return null;
+    case 'timer':
+      return validDuration(node.duration) ? null : [`${path}.duration`, 'invalid'];
+    case 'userTask': {
+      const outcomes = node.outcomes;
+      if (!Array.isArray(outcomes) || outcomes.length < 1 || outcomes.length > 10) return [`${path}.outcomes`, 'invalid'];
+      const bad = outcomes.findIndex((outcome) => textProblem(outcome, 40, ''));
+      if (bad >= 0) return [`${path}.outcomes.${bad}`, 'invalid'];
+      if (new Set(outcomes).size !== outcomes.length) return [`${path}.outcomes`, 'duplicate'];
+      return keyProblem(node.role, `${path}.role`) ?? deadline();
+    }
+    case 'serviceTask':
+      switch (node.action) {
+        case 'message':
+          return (
+            textProblem(node.text, 1_000, `${path}.text`) ??
+            (node.in === undefined || node.in === 'app' || (typeof node.in === 'string' && PROCESS_ID_FORMAT.test(node.in))
+              ? null
+              : [`${path}.in`, 'invalid'])
+          );
+        case 'subgroup': {
+          const admins = node.admins ?? DEFAULT_SUBGROUP_ADMINS;
+          if (!Array.isArray(admins) || admins.length < 1 || admins.length > 10) return [`${path}.admins`, 'invalid'];
+          const bad = admins.findIndex((key, j) => keyProblem(key, `${j}`));
+          return textProblem(node.name, 120, `${path}.name`) ?? (bad >= 0 ? [`${path}.admins.${bad}`, 'invalid'] : null);
+        }
+        case 'push':
+          return keyProblem(node.role, `${path}.role`) ?? textProblem(node.text, 240, `${path}.text`);
+        default:
+          return [`${path}.action`, 'invalid'];
+      }
+    default:
+      return [path, 'invalid'];
+  }
+}
+
+function flowProblem(flow: unknown, path: string, ids: Set<string>): [string, string] | null {
+  if (!isRecord(flow) || typeof flow.from !== 'string' || typeof flow.to !== 'string') return [path, 'invalid'];
+  if (!ids.has(flow.from)) return [`${path}.from`, 'unknown'];
+  if (!ids.has(flow.to)) return [`${path}.to`, 'unknown'];
+
+  const kinds = ['outcome', 'deadline', 'condition', 'default', 'each'].filter((key) => key in flow);
+  if (kinds.length === 0) return null;
+  if (kinds.length > 1) return [path, 'invalid'];
+
+  const condition = flow.condition;
+
+  switch (kinds[0]) {
+    case 'outcome':
+      return typeof flow.outcome === 'string' ? null : [path, 'invalid'];
+    case 'deadline':
+    case 'default':
+      return flow[kinds[0]] === true ? null : [path, 'invalid'];
+    case 'condition':
+      if (!isRecord(condition) || typeof condition.field !== 'string') return [`${path}.condition`, 'invalid'];
+      if (
+        condition.op !== 'empty' &&
+        !(['=', '!=', '<', '>'].includes(condition.op as string) && ['string', 'number', 'boolean'].includes(typeof condition.value))
+      ) {
+        return [`${path}.condition`, 'invalid'];
+      }
+      return PROCESS_FIELD_FORMAT.test(condition.field) ? null : [`${path}.condition.field`, 'invalid'];
+    default:
+      return [path, 'invalid'];
+  }
+}
+
+// What may leave each element.
+function leavingProblem(node: PotokProcessNode, path: string, flows: PotokProcessFlow[]): [string, string] | null {
+  const out = flows.filter((flow) => flow.from === node.id);
+  const plainOne = out.length === 1 && plainFlow(out[0]);
+
+  switch (node.type) {
+    case 'startEvent':
+      if (flows.some((flow) => flow.to === node.id)) return [path, 'start_incoming'];
+      return plainOne ? null : [path, 'one_flow'];
+    case 'endEvent':
+      return out.length === 0 ? null : [path, 'end_outgoing'];
+    case 'serviceTask':
+    case 'timer':
+      return plainOne ? null : [path, 'one_flow'];
+    case 'userTask': {
+      if (out.some((flow) => flow.outcome === undefined && flow.deadline === undefined)) return [path, 'plain_flow'];
+      const byOutcome = out.flatMap((flow) => (flow.outcome === undefined ? [] : [flow.outcome])).sort();
+      if (JSON.stringify(byOutcome) !== JSON.stringify([...node.outcomes].sort())) return [`${path}.outcomes`, 'no_flow'];
+      const deadlines = out.filter((flow) => flow.deadline !== undefined).length;
+      return deadlines === (node.deadline ? 1 : 0) ? null : [`${path}.deadline`, 'no_flow'];
+    }
+    case 'exclusiveGateway': {
+      const defaults = out.filter((flow) => flow.default !== undefined).length;
+      const conditioned = out.filter((flow) => flow.condition !== undefined).length;
+      if (defaults !== 1) return [path, 'no_default'];
+      return conditioned >= 1 && defaults + conditioned === out.length ? null : [path, 'conditions'];
+    }
+  }
+}
+
+// ValueRules: a rule's process is a name, and a graph that can hold.
+function processesProblem(rules: Record<string, PotokRule> | undefined): PotokError | null {
+  for (const [collection, rule] of Object.entries(rules ?? {})) {
+    const process: unknown = rule?.process;
+    if (process === undefined || process === null) continue;
+
+    if (!isRecord(process) || typeof process.name !== 'string' || textProblem(process.name, MAX_PROCESS_NAME, '')) {
+      return { ok: false, error: 'invalid_rules', reason: 'invalid_rules' };
+    }
+
+    if (process.graph === undefined || process.graph === null) continue;
+
+    const problem = graphProblem(process.graph);
+    if (problem) {
+      const [path, reason] = problem;
+      return { ok: false, error: 'invalid_process', collection, path: path ? `process.graph.${path}` : 'process.graph', reason };
+    }
+  }
+
+  return null;
+}
+
+// Engine.run: steps on from where the instance stands until it waits, ends
+// or fails. Texts and conditions read the value's data as it is now, over
+// the decisions taken so far.
+function runInstance(instance: DevInstance) {
+  const fail = (reason: string) => {
+    instance.status = 'failed';
+    instance.wake_at = null;
+    instance.error = { element: instance.element, reason };
+  };
+
+  const value = loadValues().find((row) => row.id === instance.value_id);
+  const data: PotokData = { ...instance.results, ...(value?.data ?? {}) };
+
+  instance.status = 'running';
+  instance.wake_at = null;
+
+  for (;;) {
+    if (instance.steps >= MAX_PROCESS_STEPS) return fail('too_many_steps');
+
+    const node = nodeOf(instance.graph, instance.element);
+    if (!node) return fail('unknown_element');
+
+    instance.steps += 1;
+    const out = flowsOut(instance.graph, node.id);
+    let next: PotokProcessFlow | undefined;
+
+    switch (node.type) {
+      case 'startEvent':
+        next = out.find(plainFlow);
+        break;
+      case 'serviceTask': {
+        const reason = performService(node, instance, data);
+        if (reason) return fail(reason);
+        next = out.find(plainFlow);
+        break;
+      }
+      case 'exclusiveGateway':
+        next = out.find((flow) => flow.condition && conditionHolds(flow.condition, data)) ?? out.find((flow) => flow.default);
+        break;
+      case 'userTask':
+        instance.status = 'waiting';
+        instance.wake_at = node.deadline ? later(node.deadline) : null;
+        return;
+      case 'timer':
+        instance.status = 'waiting';
+        instance.wake_at = later(node.duration);
+        return;
+      case 'endEvent':
+        instance.status = 'done';
+        return;
+    }
+
+    if (!next) return fail('no_flow');
+    instance.element = next.to;
+  }
+}
+
+// ProcessActions, as far as the console goes.
+function performService(
+  node: Extract<PotokProcessNode, { type: 'serviceTask' }>,
+  instance: DevInstance,
+  data: PotokData,
+): string | null {
+  const name = devRule(loadConfig(), instance.collection).process?.name ?? instance.collection;
+
+  switch (node.action) {
+    case 'message': {
+      const text = renderProcessText(node.text, data);
+      if (text === '') return 'empty_text';
+
+      const target = node.in && node.in !== 'app' ? instance.groups[node.in] : 'app';
+      if (target === undefined) return 'no_subgroup';
+
+      console.info(`[potok-dev] process "${name}" writes in ${target === 'app' ? "the app's group" : `sub-group ${target}`}:`, text);
+      return null;
+    }
+    case 'subgroup': {
+      const index = instance.graph.nodes.indexOf(node);
+      const title = renderProcessText(node.name, data).slice(0, MAX_GROUP_NAME_LENGTH) || name;
+      instance.groups[node.id] = 800_000 + instance.id * 100 + index;
+      console.info(`[potok-dev] process "${name}" makes sub-group ${instance.groups[node.id]}:`, title);
+      return null;
+    }
+    case 'push':
+      console.info(`[potok-dev] process "${name}" sends a push to role ${node.role}:`, renderProcessText(node.text, data).slice(0, 240));
+      return null;
+  }
+}
+
+// Processes.present/3: what the viewer sees of an instance.
+function presentInstance(instance: DevInstance): PotokProcess {
+  const node = nodeOf(instance.graph, instance.element);
+
+  return {
+    id: instance.id,
+    value_id: instance.value_id,
+    status: instance.status,
+    element: instance.element,
+    wake_at: instance.wake_at,
+    error: instance.error,
+    groups: { ...instance.groups },
+    task:
+      instance.status === 'waiting' && node?.type === 'userTask'
+        ? {
+            element: node.id,
+            outcomes: node.outcomes,
+            deadline_at: instance.wake_at,
+            can_complete: viewerRoleKeys[devViewer].includes(node.role),
+          }
+        : null,
+    log: instance.log.map((entry) => ({
+      at: entry.at,
+      element: entry.element,
+      outcome: entry.outcome,
+      comment: entry.comment,
+      'form?': false,
+      by: { id: entry.by, username: viewerNames.get(entry.by) ?? null },
+    })),
+  };
+}
+
+// A timer or a task's deadline wakes the instance while the page stays open.
+function scheduleWake(instance: DevInstance) {
+  if (instance.status !== 'waiting' || !instance.wake_at) return;
+
+  const delay = Date.parse(instance.wake_at) - Date.now();
+  if (delay < MAX_TIMEOUT_MS) setTimeout(wakeDueInstances, Math.max(0, delay) + 50);
+}
+
+// The app's open pages hear which instance moved.
+function announceInstance(instance: DevInstance) {
+  if (instance.app === ownDescriptionId) {
+    setTimeout(() => deliverChange({ event: 'process', collection: instance.collection, id: instance.id }));
+  }
+
+  scheduleWake(instance);
+}
+
+// Scheduler: the instances whose timer or task's deadline is due go on.
+function wakeDueInstances() {
+  const instances = loadInstances();
+  const now = Date.now();
+  const woken = instances.filter(
+    (instance) => instance.status === 'waiting' && instance.wake_at && Date.parse(instance.wake_at) <= now,
+  );
+
+  woken.forEach((instance) => {
+    const timer = nodeOf(instance.graph, instance.element)?.type === 'timer';
+    const flow = flowsOut(instance.graph, instance.element).find((row) => (timer ? plainFlow(row) : row.deadline));
+
+    if (flow) {
+      instance.element = flow.to;
+      runInstance(instance);
+    } else {
+      instance.status = 'failed';
+      instance.wake_at = null;
+      instance.error = { element: instance.element, reason: 'no_flow' };
+    }
+  });
+
+  if (woken.length > 0) {
+    saveInstances(instances);
+    woken.forEach(announceInstance);
+  }
+}
+
+// A new value of a collection whose rule has a process with a graph.
+function startProcess(collection: string, rule: DevRule, value: { id: number; creator_id: number | null }) {
+  const graph = rule.process?.graph;
+  const start = graph?.nodes.find((node) => node.type === 'startEvent');
+  if (!graph || !start) return;
+
+  const instances = loadInstances();
+  const instance: DevInstance = {
+    id: instances.reduce((max, row) => Math.max(max, row.id), 0) + 1,
+    app: ownDescriptionId,
+    collection,
+    value_id: value.id,
+    creator_id: value.creator_id,
+    status: 'running',
+    element: start.id,
+    wake_at: null,
+    error: null,
+    groups: {},
+    log: [],
+    results: {},
+    steps: 0,
+    graph: structuredClone(graph),
+  };
+
+  runInstance(instance);
+  instances.push(instance);
+  saveInstances(instances);
+  announceInstance(instance);
+}
+
+type DevFile =PotokUploadedFile & { blob: Blob; collection: string | null; slot: string; response: number | null; sender: number | null };
 
 // ValueSummary: buckets by JSON type, the 50 biggest per key and row.
 function summarize(rows: PotokCollectionValue[], under: string[], keys: string[]): PotokSummary['keys'] {
@@ -1043,6 +1593,7 @@ function createServer(el: HTMLElement) {
   const values = loadValues();
   const ownGroup = loadOwnGroup();
   let children = loadChildren();
+  loadInstances().forEach(scheduleWake);
 
   // A tab with another `?app` writes to the same store; its values are taken
   // in before every call, so that neither tab overwrites the other's.
@@ -1787,6 +2338,8 @@ function createServer(el: HTMLElement) {
             ? { ...config, data: Object.fromEntries(Object.entries(config.data).filter(([key]) => key !== 'secret')) }
             : config,
         caps,
+        // The process profile holds what it needs here, and its owner edits the app.
+        process_warnings: {},
         manage: viewerManages,
         can_create_groups: viewerManages,
         files: viewerManages
@@ -1802,7 +2355,10 @@ function createServer(el: HTMLElement) {
       };
     },
 
-    saveConfig(data: PotokConfigData, revision: number | null): { ok: true; config: PotokConfig } | PotokError {
+    saveConfig(
+      data: PotokConfigData,
+      revision: number | null,
+    ): { ok: true; config: PotokConfig; process_warnings: Record<string, PotokProcessWarning> } | PotokError {
       if (!viewerManages) return forbidden;
       if (byteSize(data) > MAX_CONFIG_BYTES) return { ok: false, error: 'too_large', message: 'That is too much to save.' };
 
@@ -1810,6 +2366,9 @@ function createServer(el: HTMLElement) {
       if ((current?.revision ?? 0) !== (revision ?? -1) && !(current === null && (revision ?? 0) === 0)) {
         return { ok: false, error: 'conflict', current };
       }
+
+      const invalid = processesProblem(data.rules);
+      if (invalid) return invalid;
 
       const config: PotokConfig = {
         id: current?.id ?? 900_000 + (ownDescriptionId ?? 0),
@@ -1820,7 +2379,27 @@ function createServer(el: HTMLElement) {
 
       saveConfigData(config);
       setTimeout(() => deliverChange({ event: 'config', collection: 'config', id: config.id, revision: config.revision }));
-      return { ok: true, config };
+
+      // A rule that lost its process cancels the instances that run or wait.
+      const instances = loadInstances();
+      const stopped = instances.filter(
+        (instance) =>
+          instance.app === ownDescriptionId &&
+          (instance.status === 'running' || instance.status === 'waiting') &&
+          !data.rules?.[instance.collection]?.process,
+      );
+
+      stopped.forEach((instance) => {
+        instance.status = 'cancelled';
+        instance.wake_at = null;
+      });
+
+      if (stopped.length > 0) {
+        saveInstances(instances);
+        stopped.forEach(announceInstance);
+      }
+
+      return { ok: true, config, process_warnings: {} };
     },
 
     insertCollectionValue(collection: string, data: string): { ok: true; value: PotokCollectionValue } | PotokError {
@@ -1875,7 +2454,7 @@ function createServer(el: HTMLElement) {
 
       const value = this.present(row as PotokCollectionValue, rule, key);
       setTimeout(() => deliverChange({ event: 'created', collection, value }));
-      startDevProcess(collection, row.id, rule);
+      startProcess(collection, rule, row);
       return { ok: true, value };
     },
 
@@ -2144,6 +2723,99 @@ function createServer(el: HTMLElement) {
 
       return { ok: true, url: URL.createObjectURL(sent.blob), name: sent.name, type: sent.type, size: sent.size };
     },
+
+    // --- Processes (see "Processes of the app's collections" above) ---
+
+    listProcesses(collection: unknown, ids: unknown): { ok: true; processes: PotokProcess[] } | PotokError {
+      if (viewerId === null) return forbidden;
+      if (typeof collection !== 'string') return { ok: false, error: 'invalid_collection' };
+
+      wakeDueInstances();
+      const all = fullReader(devRule(loadConfig(), collection));
+      const kept = Array.isArray(ids) ? ids.filter(Number.isInteger).slice(0, MAX_PROCESS_LIST) : null;
+
+      const processes = loadInstances()
+        .filter(
+          (instance) =>
+            instance.app === ownDescriptionId &&
+            instance.collection === collection &&
+            (all || instance.creator_id === viewerId) &&
+            (!kept || kept.includes(instance.value_id)),
+        )
+        .sort((a, b) => b.id - a.id)
+        .slice(0, MAX_PROCESS_LIST)
+        .map(presentInstance);
+
+      return { ok: true, processes };
+    },
+
+    // Engine.complete_task/5, with the refusals in its order.
+    completeProcessTask(
+      id: number,
+      element: unknown,
+      outcome: unknown,
+      comment: unknown,
+    ): { ok: true; process: PotokProcess } | PotokError {
+      if (viewerId === null) return forbidden;
+
+      wakeDueInstances();
+      const instances = loadInstances();
+      const instance = instances.find((row) => row.id === id && row.app === ownDescriptionId);
+      if (!instance) return { ok: false, error: 'not_found' };
+      if (typeof element !== 'string' || typeof outcome !== 'string') return { ok: false, error: 'invalid_outcome' };
+
+      const task = nodeOf(instance.graph, instance.element);
+      if (instance.status !== 'waiting' || instance.element !== element || task?.type !== 'userTask') {
+        return { ok: false, error: 'not_waiting' };
+      }
+
+      if (!task.outcomes.includes(outcome)) return { ok: false, error: 'invalid_outcome' };
+      if (!devRule(loadConfig(), instance.collection).process) return { ok: false, error: 'process_inactive' };
+      if (!viewerRoleKeys[devViewer].includes(task.role)) return forbidden;
+
+      const text = typeof comment === 'string' ? comment.trim().slice(0, MAX_PROCESS_COMMENT) || null : null;
+      instance.log.push({ at: timestamp(), element, outcome, comment: text, by: viewerId });
+      instance.results[element] = { outcome, comment: text, by: viewerNames.get(viewerId) ?? null };
+      instance.element = flowsOut(instance.graph, element).find((flow) => flow.outcome === outcome)!.to;
+      runInstance(instance);
+
+      saveInstances(instances);
+      announceInstance(instance);
+      return { ok: true, process: presentInstance(instance) };
+    },
+
+    // Processes.retry/4 and cancel/4: for the app's editors.
+    retryProcess(id: number): { ok: true; process: PotokProcess } | PotokError {
+      if (!viewerManages) return forbidden;
+
+      const instances = loadInstances();
+      const instance = instances.find((row) => row.id === id && row.app === ownDescriptionId);
+      if (!instance) return { ok: false, error: 'not_found' };
+      if (instance.status !== 'failed') return { ok: false, error: 'not_failed' };
+
+      instance.error = null;
+      runInstance(instance);
+
+      saveInstances(instances);
+      announceInstance(instance);
+      return { ok: true, process: presentInstance(instance) };
+    },
+
+    cancelProcess(id: number): { ok: true; process: PotokProcess } | PotokError {
+      if (!viewerManages) return forbidden;
+
+      const instances = loadInstances();
+      const instance = instances.find((row) => row.id === id && row.app === ownDescriptionId);
+      if (!instance) return { ok: false, error: 'not_found' };
+      if (!['running', 'waiting', 'failed'].includes(instance.status)) return { ok: false, error: 'not_running' };
+
+      instance.status = 'cancelled';
+      instance.wake_at = null;
+
+      saveInstances(instances);
+      announceInstance(instance);
+      return { ok: true, process: presentInstance(instance) };
+    },
   };
 }
 
@@ -2223,72 +2895,24 @@ function createSdk(server: DevServer): PotokSdk {
       return server.sendFile(file, null, '_image', options.onProgress);
     },
 
-    async listProcesses(collection, options = {}) {
-      const rule = devRule(loadConfig(), collection);
-      const ids = options.ids ?? null;
-      const processes = [...devProcesses.values()]
-        .filter((instance) => instance.collection === collection && (!ids || ids.includes(instance.value_id)))
-        .sort((a, b) => b.id - a.id)
-        .map((instance) => presentDevProcess(instance, rule.process));
-
-      return { ok: true, processes };
-    },
-
-    async completeTask(id, element, outcome, options = {}) {
-      const instance = [...devProcesses.values()].find((entry) => entry.id === id);
-      if (!instance) return { ok: false, error: 'not_found' };
-
-      const rule = devRule(loadConfig(), instance.collection);
-      const shown = presentDevProcess(instance, rule.process);
-
-      if (!shown.task || shown.task.element !== element) return { ok: false, error: 'not_waiting' };
-      if (!shown.task.outcomes.includes(outcome)) return { ok: false, error: 'invalid_outcome' };
-      if (!shown.task.can_complete) return processRefused;
-
-      instance.status = 'done';
-      instance.element = devProcessEnd(rule.process?.graph);
-      instance.log = [
-        ...instance.log,
-        {
-          at: timestamp(),
-          element,
-          outcome,
-          comment: options.comment?.trim() || null,
-          by: { id: viewerId ?? 0, username: `dev-${devViewer}` },
-        },
-      ];
-
-      setTimeout(() => deliverChange({ event: 'process', collection: instance.collection, id }));
-      return { ok: true, process: presentDevProcess(instance, rule.process) };
-    },
-
-    async retryProcess(id) {
-      const instance = [...devProcesses.values()].find((entry) => entry.id === id);
-      if (!viewerManages) return processRefused;
-      if (!instance) return { ok: false, error: 'not_found' };
-      if (instance.status !== 'failed') return { ok: false, error: 'not_failed' };
-
-      instance.status = 'running';
-      instance.error = null;
-      return { ok: true, process: presentDevProcess(instance, devRule(loadConfig(), instance.collection).process) };
-    },
-
-    async cancelProcess(id) {
-      const instance = [...devProcesses.values()].find((entry) => entry.id === id);
-      if (!viewerManages) return processRefused;
-      if (!instance) return { ok: false, error: 'not_found' };
-      if (instance.status !== 'running' && instance.status !== 'waiting') return { ok: false, error: 'not_running' };
-
-      instance.status = 'cancelled';
-      return { ok: true, process: presentDevProcess(instance, devRule(loadConfig(), instance.collection).process) };
-    },
-
     onValues(listener, options = {}) {
       if (typeof listener !== 'function') return () => {};
 
       const added = listener as (change: PotokValueChange) => void;
       collectionListeners.set(added, options.collection ?? null);
       return () => collectionListeners.delete(added);
+    },
+
+    async listProcesses(collection, options = {}) {
+      return server.listProcesses(collection, options.ids ?? null);
+    },
+
+    async retryProcess(id) {
+      return server.retryProcess(id);
+    },
+
+    async cancelProcess(id) {
+      return server.cancelProcess(id);
     },
 
     async updateDescription(description, options = {}) {
@@ -2385,6 +3009,71 @@ function createSdk(server: DevServer): PotokSdk {
 
     async openPollForm() {
       return server.openPollForm();
+    },
+
+    // A form opens in Potok's dialog: here it is filled in at once.
+    async listWaiting() {
+      return { ok: true as const, tasks: devTasks };
+    },
+
+    async openProcessForm(id) {
+      if (!devTasks.some((task) => task.id === id && task.kind === 'form')) {
+        return { ok: false, error: 'not_found' };
+      }
+
+      finishDevTask(id);
+      return { ok: true as const };
+    },
+
+    // A drawn decision that waits for the viewer, or a task of the app's own process.
+    async completeTask(id, element, outcome, options = {}) {
+      const task = devTasks.find((row) => row.id === id && row.kind === 'decision');
+      if (!task) return server.completeProcessTask(id, element, outcome, options.comment ?? null);
+      if (task.element !== element) return { ok: false, error: 'not_waiting' };
+      if (!task.outcomes.includes(outcome)) return { ok: false, error: 'invalid_outcome' };
+
+      finishDevTask(id);
+
+      const at = timestamp();
+      const comment = options.comment?.trim().slice(0, MAX_PROCESS_COMMENT) || null;
+
+      return {
+        ok: true as const,
+        process: {
+          id,
+          value_id: null,
+          status: 'done' as const,
+          element: 'end',
+          wake_at: null,
+          error: null,
+          groups: {},
+          task: null,
+          log: [{ at, element, outcome, comment, 'form?': false, by: { id: viewerId ?? 0, username: viewerNames.get(viewerId) ?? null } }],
+        },
+      };
+    },
+
+    async listStartable() {
+      return {
+        ok: true as const,
+        processes: [
+          {
+            id: 3,
+            name: 'Dev start',
+            takes: 'entity' as const,
+            attributes: [{ name: 'naslov', type: 'text' as const, list: false, required: true }],
+          },
+        ],
+      };
+    },
+
+    async openProcessStart(id) {
+      return id === 3 ? { ok: true as const } : { ok: false, error: 'not_found' };
+    },
+
+    onWaiting(listener) {
+      waitingListeners.add(listener);
+      return () => waitingListeners.delete(listener);
     },
 
     onPollChange(listener) {

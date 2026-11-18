@@ -54,18 +54,6 @@ export type PotokError = {
     | "invalid_collection"
     /** `saveConfig`: rules that cannot hold; `reason` says which. */
     | "invalid_rules"
-    /** `saveConfig`: a process's graph that cannot hold, at `collection` and `path`. */
-    | "invalid_process"
-    /** `completeTask`: the instance no longer waits on that task. */
-    | "not_waiting"
-    /** `completeTask`: an outcome the task does not have. */
-    | "invalid_outcome"
-    /** The collection's process was stopped. */
-    | "process_inactive"
-    /** `retryProcess`: the instance has not failed. */
-    | "not_failed"
-    /** `cancelProcess`: the instance neither runs nor waits. */
-    | "not_running"
     | "invalid_files"
     | "files_missing"
     | "files_exposed"
@@ -79,15 +67,31 @@ export type PotokError = {
     /** `aggregateValues`: a bad key, path or too many fields. */
     | "invalid_aggregate"
     /** A count or sum took over 5 seconds; a map's view took over 4. */
-    | "timeout";
+    | "timeout"
+    /** `saveConfig`: the graph of a collection's process cannot hold; `collection`, `path` and `reason` say where. */
+    | "invalid_process"
+    /** `completeTask`: the run no longer waits on that task. */
+    | "not_waiting"
+    /** `completeTask`: an outcome the task does not have. */
+    | "invalid_outcome"
+    /** `completeTask`: the rule's process was taken away. */
+    | "process_inactive"
+    /** `retryProcess`: the instance has not failed. */
+    | "not_failed"
+    /** `cancelProcess`: the instance has ended already. */
+    | "not_running"
+    /** `openProcessForm`, `openProcessStart`: in a sheet over another page (`showGroup`). */
+    | "not_here";
   message?: string;
+  /** `invalid_rules`: which rule cannot hold; `invalid_process`: why, such as `no_flow` or `unknown_role`. */
   reason?: string;
   current?: unknown;
+  /** `invalid_process`: the collection whose rule it is. */
+  collection?: string;
+  /** `invalid_process`: where, counted from the rule, such as `process.graph.nodes.3.outcomes`. */
+  path?: string;
   /** `createChildren`: the position of the child that failed; nothing was saved. */
   index?: number;
-  /** `invalid_process`: the collection and the path in its rule, such as `process.graph.nodes.3`. */
-  collection?: string;
-  path?: string;
 };
 
 /** A data value, as returned by insert and sent to new value listeners. */
@@ -222,52 +226,109 @@ export type PotokRule = {
     released?: boolean;
     show?: { missed?: boolean; correct?: boolean; points?: boolean };
   } | null;
-  /** A process for every new value, signed by a profile of its own. */
-  process?: { name: string; graph?: PotokProcessGraph } | null;
+  /** Runs a process for every new value of the collection. */
+  process?: PotokRuleProcess | null;
 };
 
-/** An element of a process's graph; types are named as in BPMN. */
-export type PotokProcessNode =
-  | { id: string; type: "startEvent" | "endEvent" | "exclusiveGateway" }
-  | { id: string; type: "serviceTask"; action: "message"; text: string; in?: string }
-  | { id: string; type: "serviceTask"; action: "subgroup"; name: string; admins?: string[] }
-  | { id: string; type: "serviceTask"; action: "push"; role: PotokRoleKey; text: string }
-  | { id: string; type: "userTask"; role: PotokRoleKey; outcomes: string[]; deadline?: string }
-  | { id: string; type: "timer"; duration: string };
+/**
+ * A rule's process. Its first save gives it a profile of its own called
+ * `name` (at most 60 characters), which joins the app's group with what
+ * `everyone` holds there and signs what the process does; the editor who
+ * saved it owns it. Without `graph` it starts nothing. Taking it out of the
+ * rule cancels its instances that run or wait.
+ */
+export type PotokRuleProcess = { name: string; graph?: PotokProcessGraph };
 
+/**
+ * What a process does, elements named as in BPMN; an instance stands on one
+ * element at a time. Saved only when an instance can finish it: one start,
+ * every element reachable from it and able to reach an end, a flow for every
+ * outcome, role keys the group has.
+ */
+export type PotokProcessGraph = { nodes: PotokProcessNode[]; flows: PotokProcessFlow[] };
+
+/**
+ * An element. Ids are lowercase letters, digits, `-` and `_`, from a letter,
+ * at most 40; `label` (at most 60) names it on a drawing and where an
+ * instance waits or stopped. Texts and names may hold fields of the value,
+ * as `{{title}}` or `{{a.q1}}`, and a task's decision, as `{{task_id.outcome}}`.
+ * Durations are ISO 8601 (`PT30M`, `PT1H`, `P3D`, `P1W`), from a minute to a year.
+ */
+export type PotokProcessNode = { id: string; label?: string } & (
+  /** A gateway takes the first flow whose `condition` holds, else its `default` flow. */
+  | { type: "startEvent" | "endEvent" | "exclusiveGateway" }
+  /** Writes `text` into the app's group (`in: "app"`, the default) or a sub-group an element of the instance made (`in`: its id); needs `post_values`. */
+  | { type: "serviceTask"; action: "message"; text: string; in?: string }
+  /** Makes a sub-group called `name`; `admins` are role keys, "owner" and "triggered_by" (the last two by default); needs `create_subgroups`. */
+  | { type: "serviceTask"; action: "subgroup"; name: string; admins?: string[] }
+  /** Sends `text` (at most 240 characters) to the people of `role`, as a mention of the role would; needs `mention_roles`. */
+  | { type: "serviceTask"; action: "push"; role: PotokRoleKey; text: string }
+  /** Waits for someone holding `role` to pick one of `outcomes` (at most 10), until an optional `deadline`. */
+  | { type: "userTask"; role: PotokRoleKey; outcomes: string[]; deadline?: string }
+  | { type: "timer"; duration: string }
+);
+
+/**
+ * A flow `from` one element `to` another: plain, or with one of the rest. A
+ * task leaves by each `outcome` and, with a deadline, by `deadline: true`; a
+ * gateway by a `condition` or as its `default`.
+ */
 export type PotokProcessFlow = {
   from: string;
   to: string;
   outcome?: string;
   deadline?: true;
+  condition?: PotokProcessCondition;
   default?: true;
-  condition?: { field: string; op: "=" | "!=" | "<" | ">" | "empty"; value?: string | number | boolean };
 };
 
-export type PotokProcessGraph = { nodes: PotokProcessNode[]; flows: PotokProcessFlow[] };
+/** One field of the value compared, as numbers when both sides are numbers and as texts otherwise. */
+export type PotokProcessCondition =
+  | { field: string; op: "=" | "!=" | "<" | ">"; value: string | number | boolean }
+  | { field: string; op: "empty" };
 
-/** What the editors should know about a collection's process. */
-export type PotokProcessWarning = { missing: string[]; owner_left: boolean };
+/** For editors: what a collection's process lacks. */
+export type PotokProcessWarning = {
+  /** The permissions its graph's actions need that its profile does not hold. */
+  missing: string[];
+  /** Its owner no longer edits the app. */
+  owner_left: boolean;
+};
 
-/** An instance of a collection's process, for one value, as the viewer may see it. */
+/** An instance of a process, as far as the viewer may see it. */
 export type PotokProcess = {
   id: number;
-  value_id: number;
+  /** The value it runs for; null for a run of a process drawn in Potok that has none. */
+  value_id: number | null;
   status: "running" | "waiting" | "done" | "failed" | "cancelled";
+  /** The element it stands on. */
   element: string;
+  /** When a timer or a task's deadline wakes it (ISO 8601). */
   wake_at: string | null;
+  /** Where it stopped and why, once it has failed. */
   error: { element: string; reason: string } | null;
-  /** The sub-groups it made, by element. */
+  /** The sub-groups it made, by the element that made them. */
   groups: Record<string, number>;
-  /** The task it waits on, and whether the viewer may finish it. */
-  task: { element: string; outcomes: string[]; deadline_at: string | null; can_complete: boolean } | null;
-  log: {
-    at: string;
+  /** The task it waits on; null while it runs, on a timer or once it ends. */
+  task: {
     element: string;
-    outcome: string;
-    comment: string | null;
-    by: { id: number; username: string | null };
-  }[];
+    outcomes: string[];
+    deadline_at: string | null;
+    /** The viewer holds the task's role. */
+    can_complete: boolean;
+  } | null;
+  /** Who decided what, the oldest first. */
+  log: PotokProcessLogEntry[];
+};
+
+export type PotokProcessLogEntry = {
+  at: string;
+  element: string;
+  outcome: string | null;
+  comment: string | null;
+  /** A form filled in, in a process drawn in Potok. The key does end in "?". */
+  "form?": boolean;
+  by: { id: number; username: string | null };
 };
 
 /** One check of a quiz's key, by question. */
@@ -320,6 +381,8 @@ export type PotokConfigReply = {
   ok: true;
   config: PotokConfig | null;
   caps: Record<string, PotokCaps>;
+  /** For editors, by collection: the processes that lack something. Empty for everyone else. */
+  process_warnings: Record<string, PotokProcessWarning>;
   /** The viewer edits the app. */
   manage: boolean;
   /** They may make its file groups too. */
@@ -328,8 +391,6 @@ export type PotokConfigReply = {
   files: { public: "ok" | "missing" | "exposed"; private: "ok" | "missing" | "exposed" } | null;
   /** The roles an alternative description is limited to; [] for all. */
   visible_role_keys: PotokRoleKey[];
-  /** For editors: per collection with a process, what it lacks. */
-  process_warnings?: Record<string, PotokProcessWarning>;
   viewer: { signed_in: boolean; member: boolean; profile_id: number | null; username: string | null };
 };
 
@@ -407,7 +468,7 @@ export type PotokValueChange<T extends object = PotokData> =
   | { event: "cleared"; collection: string | null }
   | { event: "regraded"; collection: string }
   | { event: "config"; collection: "config"; id: number; revision: number }
-  /** An instance of the collection's process moved: read it again with `listProcesses`. */
+  /** An instance of the collection's process moved; read it again with `listProcesses`. */
   | { event: "process"; collection: string; id: number };
 
 export type PotokProfile = {
@@ -802,6 +863,46 @@ export type PotokPoll = {
   options: PotokPollOption[];
 };
 
+/** An attribute of an entity a process drawn in the group asks for. */
+export type PotokAttribute = {
+  name: string;
+  type: "text" | "number" | "boolean" | "date" | "datetime" | "choice" | "entity";
+  /** A list of what the type says, a row per item in Potok's form. */
+  list: boolean;
+  required: boolean;
+  /** The choices of a `choice`. */
+  options?: string[];
+  /** The id of the entity an `entity` holds. */
+  entity?: number;
+};
+
+/** What waits for the viewer in the group (`listWaiting`). */
+export type PotokTask = {
+  /** The run that waits: `openProcessForm` and `completeTask` take it. */
+  id: number;
+  process: { id: number; name: string };
+  element: string;
+  label: string;
+  /** A form to fill in (`attributes`) or a decision (`outcomes`). */
+  kind: "form" | "decision";
+  title: string | null;
+  text: string | null;
+  deadline_at: string | null;
+  outcomes: string[];
+  attributes: PotokAttribute[];
+  /** Whether the viewer started the run it waits in. */
+  started_by_viewer: boolean;
+};
+
+/** A process drawn in the group the viewer may start by hand (`listStartable`). */
+export type PotokStartable = {
+  id: number;
+  name: string;
+  /** The attributes of an entity, or a title and a text. */
+  takes: "entity" | "text";
+  attributes: PotokAttribute[];
+};
+
 export type PotokPollListOptions = {
   /** "waiting" holds those the viewer can still vote in, without paging. */
   status?: "open" | "closed" | "waiting";
@@ -840,24 +941,8 @@ export type PotokSdk = {
     data: PotokConfigData,
     options: { revision: number },
   ): Promise<
-    { ok: true; config: PotokConfig; process_warnings?: Record<string, PotokProcessWarning> } | PotokError
+    { ok: true; config: PotokConfig; process_warnings: Record<string, PotokProcessWarning> } | PotokError
   >;
-  /** The instances of the collection's process the viewer may see, newest first, up to 100. */
-  listProcesses(
-    collection: string,
-    options?: { ids?: number[] },
-  ): Promise<{ ok: true; processes: PotokProcess[] } | PotokError>;
-  /** Finishes the task the instance waits on at `element`, for someone holding its role. */
-  completeTask(
-    id: number,
-    element: string,
-    outcome: string,
-    options?: { comment?: string },
-  ): Promise<{ ok: true; process: PotokProcess } | PotokError>;
-  /** For editors: takes a failed instance up again where it stopped. */
-  retryProcess(id: number): Promise<{ ok: true; process: PotokProcess } | PotokError>;
-  /** For editors: cancels an instance that runs or waits. */
-  cancelProcess(id: number): Promise<{ ok: true; process: PotokProcess } | PotokError>;
   /** The viewer's own value, where the rule lets authors change theirs. */
   updateValue<T extends object = PotokData>(
     id: number,
@@ -902,6 +987,19 @@ export type PotokSdk = {
     listener: (change: PotokValueChange<T>) => void,
     options?: { collection?: string },
   ): () => void;
+  /**
+   * The instances of `collection`'s process the viewer may see, of the values
+   * they read in full and of their own, newest first, at most 100. `ids`
+   * keeps those of these values. Processes drawn in Potok are left out.
+   */
+  listProcesses(
+    collection: string,
+    options?: { ids?: number[] },
+  ): Promise<{ ok: true; processes: PotokProcess[] } | PotokError>;
+  /** For editors: takes a failed instance up again where it stopped. */
+  retryProcess(id: number): Promise<{ ok: true; process: PotokProcess } | PotokError>;
+  /** For editors: cancels an instance that runs, waits or has failed. */
+  cancelProcess(id: number): Promise<{ ok: true; process: PotokProcess } | PotokError>;
   updateDescription(
     description: string,
     options?: { descriptionFormat?: PotokContentFormat },
@@ -1001,6 +1099,45 @@ export type PotokSdk = {
    * function that removes the listener.
    */
   onPollChange(listener: (id: number) => void): () => void;
+  /**
+   * What waits for the viewer in the group, of the processes its editors draw
+   * in Potok: a form to fill in or a decision, the nearest deadline first.
+   * Members only.
+   */
+  listWaiting(): Promise<{ ok: true; tasks: PotokTask[] } | PotokError>;
+  /**
+   * Opens Potok's dialog of a form that waits for the viewer, over the app. An
+   * app reads a form and never fills one in. In a sheet over another page:
+   * `not_here`.
+   */
+  openProcessForm(id: number): Promise<{ ok: true } | PotokError>;
+  /**
+   * Finishes the task the instance `id` waits on at `element`, picking
+   * `outcome`, for someone holding its role: of the app's own process
+   * (`listProcesses`) or a drawn decision that waits for the viewer
+   * (`listWaiting`). `comment` (at most 1000 characters) goes into its log.
+   */
+  completeTask(
+    id: number,
+    element: string,
+    outcome: string,
+    options?: { comment?: string },
+  ): Promise<{ ok: true; process: PotokProcess } | PotokError>;
+  /** The processes drawn in the group the viewer may start by hand. */
+  listStartable(): Promise<{ ok: true; processes: PotokStartable[] } | PotokError>;
+  /**
+   * Opens Potok's Start dialog of one, over the app, with `prefill` (by
+   * attribute, or `title` and `text`) written in for the viewer to change.
+   */
+  openProcessStart(
+    id: number,
+    options?: { prefill?: Record<string, unknown> },
+  ): Promise<{ ok: true } | PotokError>;
+  /**
+   * Gets word when what waits for the viewer changed: read it again with
+   * `listWaiting`. Returns a function that removes the listener.
+   */
+  onWaiting(listener: () => void): () => void;
   /**
    * Gets every new value of this app, also the viewer's own; with
    * `{scope: "group"}` also those of the group's other apps. Returns a
