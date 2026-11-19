@@ -76,6 +76,12 @@ export type PotokError = {
     | "invalid_outcome"
     /** `completeTask`: the rule's process was taken away. */
     | "process_inactive"
+    /** `setPersonal` and the rest: a key is 1 to 64 letters, digits and `_ . : -`. */
+    | "invalid_key"
+    /** `setPersonal`: the value is over 16 KB as JSON. */
+    | "too_big"
+    /** `setPersonal`: the app keeps 100 keys for this person already. */
+    | "too_many_keys"
     /** `retryProcess`: the instance has not failed. */
     | "not_failed"
     /** `cancelProcess`: the instance has ended already. */
@@ -426,6 +432,13 @@ export type PotokSummary = {
     items: Record<string, { ok?: number; bad?: number; pending?: number }>;
   } | null;
 };
+
+/** A key of the personal memory (`listPersonal`). */
+export interface PotokPersonalItem {
+  key: string;
+  value: unknown;
+  updated_at?: string;
+}
 
 /** What `aggregateValues` adds up. Keys are 1 to 64 bytes. */
 export type PotokAggregateOptions = {
@@ -1073,6 +1086,19 @@ export type PotokSdk = {
   linkGroup(id: number): Promise<{ ok: true } | PotokError>;
   /** The group in the page's address. Nothing checks it: `aroundId` does. */
   getLinkedGroup(): Promise<{ ok: true; group_id: number | null } | PotokError>;
+  /**
+   * The app's personal memory: what it keeps for the viewer alone, the same on
+   * every device, such as how far they read. Nobody else reads it, not even the
+   * app's editors, and the viewer sees and deletes it in Potok's settings. A
+   * guest's stays in the browser. Up to 100 keys per person, 16 KB each.
+   */
+  listPersonal(): Promise<{ ok: true; items: PotokPersonalItem[] } | PotokError>;
+  /** One key of the personal memory: `value` is null for a key not kept. */
+  getPersonal<T = unknown>(key: string): Promise<{ ok: true; value: T | null } | PotokError>;
+  /** Keeps anything JSON holds under `key`, for the viewer alone. Counts as a write. */
+  setPersonal(key: string, value: unknown): Promise<{ ok: true } | PotokError>;
+  /** Forgets a key of the personal memory; one not kept is fine. Counts as a write. */
+  deletePersonal(key: string): Promise<{ ok: true } | PotokError>;
   /**
    * For a guest (`getCurrentProfile()` resolves to null): takes the page to
    * Potok's log-in, which brings them back to this group. A frame cannot leave

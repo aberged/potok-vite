@@ -140,6 +140,25 @@ const ownDescriptionId = Number.isInteger(appParam) && appParam > 0 ? appParam :
 
 const ownValue = (value: { description_id: number | null }) => value.description_id === ownDescriptionId;
 
+// The app's personal memory, per viewer and app, under `potok-dev:personal`:
+// `{"<viewer>:<app>": {"<key>": {value, updated_at}}}`. In potok only that
+// person reads it (a guest's stays in the browser), with the same limits.
+const PERSONAL_STORAGE_KEY = 'potok-dev:personal';
+const PERSONAL_MAX_KEYS = 100;
+const PERSONAL_MAX_BYTES = 16384;
+const PERSONAL_KEY = /^[A-Za-z0-9_.:-]{1,64}$/;
+
+type PersonalStore = Record<string, Record<string, { value: unknown; updated_at: string }>>;
+
+function loadPersonal(): PersonalStore {
+  try {
+    const stored: unknown = JSON.parse(localStorage.getItem(PERSONAL_STORAGE_KEY) || '{}');
+    return stored && typeof stored === 'object' && !Array.isArray(stored) ? (stored as PersonalStore) : {};
+  } catch {
+    return {};
+  }
+}
+
 // listener -> whether it gets the values of every app in the group.
 const newValueListeners = new Map<(value: PotokValue) => void, boolean>();
 
@@ -1982,6 +2001,37 @@ function createServer(el: HTMLElement) {
       return { ok: true, group_id: Number(new URLSearchParams(location.search).get(LINK_PARAM)) || null };
     },
 
+    personal(method: 'list' | 'get' | 'set' | 'delete', key?: unknown, value?: unknown) {
+      const store = loadPersonal();
+      const mine = `${devViewer}:${ownDescriptionId ?? ''}`;
+      const items = store[mine] ?? {};
+
+      if (method === 'list') {
+        const list = Object.keys(items)
+          .sort()
+          .map((name) => ({ key: name, value: items[name].value, updated_at: items[name].updated_at }));
+        return { ok: true as const, items: list };
+      }
+
+      if (typeof key !== 'string' || !PERSONAL_KEY.test(key)) return { ok: false as const, error: 'invalid_key' as const };
+      if (method === 'get') return { ok: true as const, value: items[key]?.value ?? null };
+
+      if (method === 'delete') {
+        delete items[key];
+      } else {
+        const json = JSON.stringify(value ?? null);
+        if (new TextEncoder().encode(json).length > PERSONAL_MAX_BYTES) return { ok: false as const, error: 'too_big' as const };
+        if (!(key in items) && Object.keys(items).length >= PERSONAL_MAX_KEYS) {
+          return { ok: false as const, error: 'too_many_keys' as const };
+        }
+        items[key] = { value: JSON.parse(json), updated_at: new Date().toISOString() };
+      }
+
+      store[mine] = items;
+      localStorage.setItem(PERSONAL_STORAGE_KEY, JSON.stringify(store));
+      return { ok: true as const };
+    },
+
     openLogin(): { ok: true } | PotokError {
       if (viewerId !== null) return { ok: false, error: 'unavailable' };
 
@@ -2990,6 +3040,22 @@ function createSdk(server: DevServer): PotokSdk {
 
     async getLinkedGroup() {
       return server.getLinkedGroup();
+    },
+
+    async listPersonal() {
+      return server.personal('list') as never;
+    },
+
+    async getPersonal(key) {
+      return server.personal('get', key) as never;
+    },
+
+    async setPersonal(key, value) {
+      return server.personal('set', key, value) as never;
+    },
+
+    async deletePersonal(key) {
+      return server.personal('delete', key) as never;
     },
 
     async openLogin() {
