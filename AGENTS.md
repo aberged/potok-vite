@@ -24,6 +24,8 @@ Nema testova ni lintera. `npm run build` je jedina automatska provera: `tsc` hva
 
 `src/potok.ts`, `src/potok-dev.ts` i `vite.config.ts` prate API potok-ide-a i wrapper. Ne menjaj ih, osim ako zadatak to izričito traži.
 
+Ovaj šablon je nacrtan na strani pomoći `/pomoc/arhitektura-aplikacije` u potok-ide-u (prvi dijagram u `page_html/help_app_architecture.html.heex`): fajlovi iz spiska gore, `potokBuildPlugin`, `npm run build` i izlaz `dist/potok-build.html`. Kad se nešto od toga promeni, promeni i taj dijagram: nijedan test u potok-ide-u to ne vidi.
+
 ## Pravila
 
 Kršenje ovih pravila obično prolazi `npm run dev`, pa i `npm run build`, a aplikacija pukne tek u potok-u.
