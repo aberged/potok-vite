@@ -1046,6 +1046,14 @@ export type PotokSdk = {
    */
   openGroup(id: number, options?: { tab?: PotokGroupTab }): Promise<{ ok: true } | PotokError>;
   /**
+   * Takes the viewer, on the same page, to the root's map at the point (in
+   * degrees): a pin with this group's picture, and a card with its name and
+   * `label` (at most 80 characters). For a place the app keeps in its own data;
+   * the group's own place stays as it is. `invalid_place` for a point out of
+   * range, `forbidden` for a guest. The app ends with the page.
+   */
+  openMap(point: { lat: number; lng: number; label?: string | null }): Promise<{ ok: true } | PotokError>;
+  /**
    * Adds the viewer's reaction to a group below this one, or takes it back, as
    * a click on a reaction does. Counts as a write for the rate limit.
    */

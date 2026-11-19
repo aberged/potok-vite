@@ -1925,6 +1925,17 @@ function createServer(el: HTMLElement) {
       return { ok: true };
     },
 
+    openMap(lat: unknown, lng: unknown, label: unknown): { ok: true } | PotokError {
+      if (devViewer === 'guest') return forbidden;
+      const inRange = (n: unknown, bound: number) => typeof n === 'number' && Number.isFinite(n) && Math.abs(n) <= bound;
+      if (!inRange(lat, 90) || !inRange(lng, 180)) return { ok: false, error: 'invalid_place' };
+
+      const query = new URLSearchParams({ point: `${(lat as number).toFixed(6)},${(lng as number).toFixed(6)}`, group: String(ownGroup.id) });
+      if (typeof label === 'string' && label.trim() !== '') query.set('label', label.trim().slice(0, 80));
+      console.info(`[potok-dev] openMap: in potok the viewer goes to /groups/<root>/map?${query} and the app ends.`);
+      return { ok: true };
+    },
+
     toggleGroupReaction(id: number, emoji: string): { ok: true; reactions: PotokReaction[] } | PotokError {
       const subgroups = loadSubgroups();
       const group = Object.values(subgroups)
@@ -2955,6 +2966,10 @@ function createSdk(server: DevServer): PotokSdk {
 
     async openGroup(id, options = {}) {
       return server.openGroup(id, options.tab);
+    },
+
+    async openMap(point) {
+      return server.openMap(point?.lat, point?.lng, point?.label);
     },
 
     async toggleGroupReaction(id, emoji) {
