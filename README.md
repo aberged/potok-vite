@@ -6,6 +6,8 @@ Potok aplikacija je HTML koji se otprema kao opis grupe sa uključenom opcijom �
 
 Opis može biti podrazumevani ili jedan od alternativnih opisa grupe, pa grupa može imati više aplikacija, svaku sa svojim podacima.
 
+Za učenje postoji [Priručnik za potok aplikacije](https://potok-prirucnik.pages.dev/): build, pravila koja build ne hvata, ceo API po oblastima i dev mock, sa proverom znanja i oznakama koje vode na linije ovog koda.
+
 ## Brzi start
 
 ```sh
