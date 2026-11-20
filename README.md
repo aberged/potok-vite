@@ -78,7 +78,7 @@ Za svoju aplikaciju zameni sadržaj `<body>` u `index.html` i kod u `src/main.ts
 
 ## Više aplikacija u grupi
 
-Grupa ima po jednu aplikaciju za svaki opis sa „Koristi API“: podrazumevani opis i svaki takav alternativni opis.
+Grupa ima po jednu aplikaciju za svaki opis sa uključenom opcijom „Opis je aplikacija (API)“: podrazumevani opis i svaki takav alternativni opis.
 
 - Svaka aplikacija ima svoje vrednosti. `getGroupDataValues`, `listValues`, `onNewValue` i `setNewValueCallback` vide samo vrednosti svoje aplikacije.
 - Uz `scope: "group"`, `listValues` i `onNewValue` daju i vrednosti ostalih aplikacija grupe koje korisnik sme da otvori. Svaka vrednost nosi `description_id` svoje aplikacije (`null` za podrazumevani opis).
