@@ -131,6 +131,7 @@ const devProfile: PotokProfile = {
   profile_picture_url: 'https://api.dicebear.com/9.x/thumbs/svg?seed=potok-dev',
   description: null,
   description_format: 'markdown',
+  details: { first_name: 'Dev', last_name: 'User', place: 'Novi Sad' },
   sharing: 'unique',
   inserted_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',

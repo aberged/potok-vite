@@ -541,8 +541,20 @@ export type PotokProfile = {
   id: number;
   username: string;
   profile_picture_url: string;
+  /** null when empty, or when the group's members may not read it. */
   description: string | null;
   description_format: PotokContentFormat;
+  /**
+   * What the profile tells about itself to the members of this group, each
+   * left out when it is not filled or not for them. `website` holds up to
+   * three links, one per line. Missing on a Potok without details.
+   */
+  details?: Partial<
+    Record<
+      "first_name" | "last_name" | "occupation" | "place" | "phone" | "email" | "website",
+      string
+    >
+  >;
   sharing: "unique" | "shared";
   inserted_at: string;
   updated_at: string;
