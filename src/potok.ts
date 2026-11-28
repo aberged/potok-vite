@@ -364,6 +364,12 @@ export type PotokConfigData = PotokData & {
   secret?: PotokData & { score?: Record<string, Record<string, PotokScoreCheck>> };
   /** The groups that keep the app's files; written by Potok. */
   files?: { public?: number; private?: number };
+  /**
+   * true: whoever opens the app reads the config, outside members too (and
+   * guests where the group is open to them), as a site's menus and theme are
+   * for every visitor; `secret` still goes only to editors. A boolean only.
+   */
+  public?: boolean;
 };
 
 export type PotokConfig = {
@@ -596,6 +602,12 @@ export type PotokSubgroup = {
    * and for a guest also for a group that keeps its description from guests.
    */
   description_html: string | null;
+  /**
+   * With `brief` (and in `searchSubgroups`): the text of the group's card, as
+   * plain text of at most 200 characters, in place of `description_html`;
+   * null otherwise, and where the viewer may not read the description.
+   */
+  summary?: string | null;
   /** What an app says about itself in its meta tags, as plain text; null otherwise. */
   app_description: string | null;
   uses_api: boolean;
@@ -634,6 +646,16 @@ export type PotokChild = PotokSubgroup & {
   lng: number | null;
   /** A key of `pins.icons` or "picture"; null for its kind's. */
   pin: string | null;
+  /** The group it stands under: the app's group, or a section (`under`). */
+  parent_id: number;
+  /** Its description goes to guests; follows the app's group at every save. */
+  for_guests: boolean;
+  /** Outsiders write in its chat (an open chat); follows the app's group too. */
+  public_chat: boolean;
+  /** When the draft opens by itself (`publishAt`); null when it waits for nothing. */
+  publish_at: string | null;
+  /** Why it did not open at its time: "not_permitted" or "error"; null otherwise. */
+  publish_failure: string | null;
 };
 
 /** What an app may set on a sub-group. A field left out stays as it is. */
@@ -662,7 +684,19 @@ export type PotokChildAttrs = {
   lng?: number | null;
   /** A key of `pins.icons` (`getMapConfig`) or "picture"; null for its kind's. */
   pin?: string | null;
+  /**
+   * A draft opens by itself at this moment (ISO 8601 with a zone, ahead and
+   * within a year): it then becomes what `publishAs` says, in the name of the
+   * viewer, unless they may no longer edit it. null takes the time away;
+   * publishing or withdrawing by hand does too. `invalid_date` for a bad one.
+   */
+  publishAt?: string | null;
+  /** Whom it opens to at `publishAt`: both true by default. */
+  publishAs?: { isPublic?: boolean; inheritsMembers?: boolean };
 };
+
+/** Where the calls on the groups below act: `under` a direct sub-group (its id), as a site's section. */
+export type PotokUnder = { under?: number };
 
 /** A sub-group `createChildren` makes. */
 export type PotokNewChild = Omit<PotokChildAttrs, "picture" | "lat" | "lng" | "pin"> & {
@@ -904,6 +938,8 @@ export type PotokSubgroupListOptions = {
    * the list does not hold gives the first page.
    */
   aroundId?: number;
+  /** Each group's `summary` (its card's text) instead of its whole `description_html`. */
+  brief?: boolean;
 };
 
 /** A part of a list of sub-groups, newest first. */
@@ -1104,14 +1140,35 @@ export type PotokSdk = {
   getDescription(): Promise<{ ok: true; group: PotokGroupDescription } | PotokError>;
   getCurrentProfile(): Promise<PotokProfile | null>;
   /**
-   * The groups under this group's direct sub-group called exactly `name`,
-   * newest first, as far as the viewer can see them. Of several sub-groups
-   * with one name the oldest counts.
+   * The groups under this group's direct sub-group called exactly `name`, or
+   * with that id (which stays when the sub-group is renamed), newest first, as
+   * far as the viewer can see them. Of several sub-groups with one name the
+   * oldest counts.
    */
   listSubgroups(
-    name: string,
+    name: string | number,
     options?: PotokSubgroupListOptions,
   ): Promise<PotokSubgroupPage | PotokError>;
+  /**
+   * One group `listSubgroups` could return, or a direct sub-group, with the
+   * group it stands under: what an app opens from its address
+   * (`getLinkedGroup`) without knowing where it stands. `not_found` for the
+   * app's own group and its file groups.
+   */
+  getSubgroup(
+    id: number,
+    options?: { brief?: boolean },
+  ): Promise<{ ok: true; group: PotokSubgroup & { parent_id: number } } | PotokError>;
+  /**
+   * Groups one level under this group's direct sub-groups (or under `under`)
+   * whose name or text holds `q`, in any case, with or without diacritics, in
+   * either script: a site's search box. Each comes with its `summary`. A guest
+   * finds by text only what is open to guests. Counts as a heavy read.
+   */
+  searchSubgroups(
+    q: string,
+    options?: PotokSubgroupListOptions & PotokUnder,
+  ): Promise<{ ok: true; groups: PotokSubgroup[]; has_more: boolean } | PotokError>;
   /**
    * Takes the viewer to this group's parent, a direct sub-group or a group
    * `listSubgroups` can return: to its chat, with `tab: "description"` to its
@@ -1141,12 +1198,27 @@ export type PotokSdk = {
    */
   shareGroup(id: number, options?: { inApp?: boolean }): Promise<{ ok: true } | PotokError>;
   /**
-   * Puts a group in the page's address, with no new history entry, so that the
-   * address opens this app on it. The app finds it again with `getLinkedGroup`.
+   * Puts a group in the page's address, so that the address opens this app on
+   * it; the app finds it again with `getLinkedGroup`. Without `push` the
+   * address changes in place. With `push` it is a new entry of the browser's
+   * history, as a site goes to another page: Back brings the one before, and
+   * the app hears of it through `onLinkedGroupChange` instead of the page
+   * leaving. null takes the group out of the address. `entry` is the number of
+   * the history entry the app is on (null for one it did not push).
    */
-  linkGroup(id: number): Promise<{ ok: true } | PotokError>;
-  /** The group in the page's address. Nothing checks it: `aroundId` does. */
-  getLinkedGroup(): Promise<{ ok: true; group_id: number | null } | PotokError>;
+  linkGroup(
+    id: number | null,
+    options?: { push?: boolean },
+  ): Promise<{ ok: true; entry: number | null } | PotokError>;
+  /** The group in the page's address and the entry of the history. Nothing checks it: `aroundId` does. */
+  getLinkedGroup(): Promise<{ ok: true; group_id: number | null; entry: number | null } | PotokError>;
+  /**
+   * Back or Forward brought the page to another entry the app pushed, or to
+   * the address it opened with: show that group, the start for null, and find
+   * where that entry had scrolled by its number. Returns a function that
+   * removes the listener.
+   */
+  onLinkedGroupChange(listener: (change: { group_id: number | null; entry: number | null }) => void): () => void;
   /**
    * The app's personal memory: what it keeps for the viewer alone, the same on
    * every device, such as how far they read. Nobody else reads it, not even the
@@ -1172,11 +1244,20 @@ export type PotokSdk = {
    * below act in the viewer's name, so they need `can_manage_children`.
    */
   listChildren(
-    options?: PotokSubgroupListOptions,
+    options?: PotokSubgroupListOptions & PotokUnder,
   ): Promise<PotokSubgroupPage | PotokError>;
-  getChild(id: number): Promise<{ ok: true; group: PotokChild } | PotokError>;
-  /** Needs `can_create_children`. Without `isPublic` or `inheritsMembers` only the viewer sees the group. */
-  createChild(attrs: PotokChildAttrs & { name: string }): Promise<{ ok: true; group: PotokChild } | PotokError>;
+  getChild(id: number, options?: PotokUnder): Promise<{ ok: true; group: PotokChild } | PotokError>;
+  /**
+   * Needs `can_create_children`. Without `isPublic` or `inheritsMembers` only
+   * the viewer sees the group. With `under` it goes under that direct
+   * sub-group (a site's section), never one that is an app or keeps the app's
+   * files. `editorsOnly`: only those who may edit the new group add groups to
+   * it, as a site's section, where members cannot put their own groups among
+   * the articles.
+   */
+  createChild(
+    attrs: PotokChildAttrs & PotokUnder & { name: string; editorsOnly?: boolean },
+  ): Promise<{ ok: true; group: PotokChild } | PotokError>;
   /**
    * Makes up to 100 sub-groups at once, all or none (`invalid_group` with the
    * `index` of the one that failed), for one write of the rate limit. A child
@@ -1189,10 +1270,27 @@ export type PotokSdk = {
     children: PotokNewChild[],
     options?: { onExisting?: "skip" },
   ): Promise<{ ok: true; groups: PotokCreatedChild[] } | PotokError>;
-  /** A closed group that opens up moves to the top of the order. */
-  updateChild(id: number, attrs: PotokChildAttrs): Promise<{ ok: true; group: PotokChild } | PotokError>;
+  /**
+   * A draft that opens up moves to the top of the order; one that turns back
+   * into a draft loses its `published_at`. With `updatedAt` (the `updated_at`
+   * the app read) a save after someone else's answers `conflict` with the
+   * group as it is now instead of writing over it.
+   */
+  updateChild(
+    id: number,
+    attrs: PotokChildAttrs & PotokUnder,
+    options?: { updatedAt?: string },
+  ): Promise<{ ok: true; group: PotokChild } | (PotokError & { group?: PotokChild })>;
   /** Closes the group again, and its inherited members leave. Direct members and the viewer stay. */
-  withdrawChild(id: number): Promise<{ ok: true; group: PotokChild } | PotokError>;
+  withdrawChild(id: number, options?: PotokUnder): Promise<{ ok: true; group: PotokChild } | PotokError>;
+  /** Moves a group from one direct sub-group (`under`) to another (`to`): a site's article to another section. */
+  moveChild(id: number, where: { under: number; to: number }): Promise<{ ok: true; group: PotokChild } | PotokError>;
+  /**
+   * Gives the groups this app keeps (its sub-groups and those right under them)
+   * this group's guests and open chat again where they differ, for when those
+   * changed after the groups were made. One write.
+   */
+  applyAccessToChildren(): Promise<{ ok: true; updated: number; skipped: number } | PotokError>;
   /** The text as a feed will show it, sanitized on the server; counts as a write for the rate limit. */
   previewDescription(
     description: string,

@@ -75,6 +75,11 @@ import type {
 // The app's own sub-groups (`listChildren`, `createChild`, ...) are in
 // `potok-dev:children`. `potok-dev:group` overrides fields of what `getGroup`
 // answers, for a viewer with other rights or a group set up another way.
+// The groups under one of them (`under`, a site's sections) are kept in
+// `potok-dev:subgroups` under that sub-group's name, where `listSubgroups`
+// reads them, by name or by id. A draft with `publishAt` opens when it is
+// due, the next time the mock reads it. `linkGroup` with `push` adds an
+// entry to this page's history, and Back tells `onLinkedGroupChange`.
 //
 // The polls `listPolls` returns are in `potok-dev:polls`, as `PotokPoll[]`, in
 // what the viewer sees of them. Potok's own form and voting are not here:
@@ -225,6 +230,7 @@ function finishDevTask(id: number) {
 }
 const subgroupListeners = new Set<() => void>();
 const sheetListeners = new Set<(id: number) => void>();
+const linkListeners = new Set<(change: { group_id: number | null; entry: number | null }) => void>();
 
 // Places that did not fit in localStorage, until the next reload.
 let memoryPlaces: PotokPlace[] | null = null;
@@ -442,6 +448,18 @@ function saveValues(values: PotokListedValue[]) {
   }
 }
 
+// The entry of this page's history the app pushed (`linkGroup` with `push`).
+function linkedEntry(): number | null {
+  const entry = (history.state as { potokEntry?: unknown } | null)?.potokEntry;
+  return typeof entry === 'number' ? entry : null;
+}
+
+// Back and Forward between the entries the app pushed, as potok's page tells them.
+window.addEventListener('popstate', () => {
+  const change = { group_id: Number(new URLSearchParams(location.search).get(LINK_PARAM)) || null, entry: linkedEntry() };
+  setTimeout(() => linkListeners.forEach((listener) => listener(change)));
+});
+
 function loadSubgroups(): Record<string, PotokSubgroup[]> {
   try {
     const stored: unknown = JSON.parse(localStorage.getItem(SUBGROUPS_STORAGE_KEY) || '{}');
@@ -565,7 +583,32 @@ function devPicture(id: number): string {
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
-const closed = (group: PotokSubgroup) => !group.is_public && !group.inherits_members;
+// As potok's `Group.draft?/1`: closed, or private and inheriting only by roles,
+// as a draft a site's editors share. `published_at` follows it.
+const draft = (group: PotokSubgroup & { inherit_role_keys?: PotokRoleKey[] }) =>
+  !group.is_public && (!group.inherits_members || (group.inherit_role_keys ?? []).length > 0);
+
+// Lower-case Latin without diacritics, as potok's `potok_fold`.
+const CYRILLIC = 'абвгдђежзијклљмнњопрстћуфхцчџш';
+const LATIN = ['a', 'b', 'v', 'g', 'd', 'dj', 'e', 'z', 'z', 'i', 'j', 'k', 'l', 'lj', 'm', 'n', 'nj', 'o', 'p', 'r', 's', 't', 'c', 'u', 'f', 'h', 'c', 'c', 'dz', 's'];
+const fold = (text: string) =>
+  [...text.toLowerCase()]
+    .map((ch) => {
+      const at = CYRILLIC.indexOf(ch);
+      return at >= 0 ? LATIN[at] : ch === 'đ' ? 'dj' : ch;
+    })
+    .join('')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+
+// The plain text of a description, as a card or a search reads it.
+const plainText = (html: string | null | undefined) =>
+  (html ?? '')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 
 const feedTime = (group: PotokSubgroup) => group.published_at ?? group.inserted_at;
 
@@ -1707,12 +1750,39 @@ function createServer(el: HTMLElement) {
     };
   };
 
+  // A page of rows in the order of a feed, as `listChildren` pages.
+  const pageOf = (groups: PotokSubgroup[], options: PotokSubgroupListOptions): PotokSubgroupPage | PotokError => {
+    const limit = Math.min(nonNegativeInteger(options.limit) ?? DEFAULT_SUBGROUP_LIMIT, MAX_SUBGROUP_LIMIT);
+    const beforeId = nonNegativeInteger(options.beforeId);
+    const period = inPeriod(options);
+    if (typeof period !== 'function') return period;
+
+    const inOrder = [...groups].sort(compareFeedOrder).filter(period);
+    const around = aroundPage(inOrder, nonNegativeInteger(options.aroundId), limit);
+    if (around) return around;
+
+    const before = groups.find((group) => group.id === beforeId);
+    const rows = inOrder
+      .filter((group) => (beforeId === undefined ? true : before ? compareFeedOrder(before, group) < 0 : group.id < beforeId))
+      .slice(0, limit + 1);
+
+    return {
+      ok: true,
+      groups: rows.slice(0, limit).map((group) => (options.brief ? brief(group) : group)),
+      has_more: rows.length > limit,
+      has_newer: false,
+    };
+  };
+
   // One id space for sub-groups and places, as both are groups in potok.
   const nextId = () =>
     Math.max(
       100,
       children.reduce((max, row) => Math.max(max, row.id), 0),
       loadPlaces().reduce((max, row) => Math.max(max, row.id), 0),
+      Object.values(loadSubgroups())
+        .flat()
+        .reduce((max, row) => Math.max(max, row.id), 0),
     ) + 1;
 
   const newChild = (id: number, name: string, key: string | null): PotokChild => {
@@ -1744,6 +1814,11 @@ function createServer(el: HTMLElement) {
       lat: null,
       lng: null,
       pin: null,
+      parent_id: ownGroup.id,
+      for_guests: false,
+      public_chat: false,
+      publish_at: null,
+      publish_failure: null,
     };
   };
 
@@ -1773,22 +1848,144 @@ function createServer(el: HTMLElement) {
     savePlaces([...before.filter((place) => !ids.has(place.id)), ...added]);
   };
 
+  type Scope = { rows: () => PotokChild[]; store: (rows: PotokChild[]) => void; parentId: number };
+  type Publication = { publish_public?: boolean; publish_inherits?: boolean };
+
+  // A row of `potok-dev:subgroups` with what a child has, for a seeded one.
+  const asChild = (row: PotokSubgroup): PotokChild => ({ ...newChild(row.id, row.name, null), ...row }) as PotokChild;
+
+  // A due draft opens, as potok's scheduler does: the next time it is read here.
+  const publishDue = (rows: PotokChild[]): { rows: PotokChild[]; changed: boolean } => {
+    const now = Date.now();
+    let changed = false;
+
+    const next = rows.map((row) => {
+      if (!row.publish_at || Date.parse(row.publish_at) > now) return row;
+      changed = true;
+      const as = row as PotokChild & Publication;
+      const opened = {
+        ...row,
+        is_public: as.publish_public !== false,
+        inherits_members: as.publish_inherits !== false,
+        inherit_role_keys: [],
+        publish_at: null,
+        publish_failure: null,
+      };
+      return draft(row) ? { ...opened, published_at: new Date(now).toISOString() } : { ...row, publish_at: null };
+    });
+
+    return { rows: next, changed };
+  };
+
+  // Where the calls on the groups below act: the app's own sub-groups, or with
+  // `under` the groups of one of them (not an app), kept where `listSubgroups`
+  // reads them, under its name.
+  const scopeOf = (under: number | null | undefined): Scope | PotokError => {
+    if (under === undefined || under === null) {
+      return {
+        rows: () => children,
+        store: (rows) => {
+          children = rows;
+          saveChildren(rows);
+        },
+        parentId: ownGroup.id,
+      };
+    }
+
+    const section = children.find((row) => row.id === under && !row.uses_api);
+    if (!section) return { ok: false, error: 'not_found' };
+
+    const store = (rows: PotokChild[]) => {
+      const all = loadSubgroups();
+      all[section.name] = rows;
+      saveSubgroups(all);
+    };
+
+    return {
+      rows: () => {
+        const due = publishDue((loadSubgroups()[section.name] ?? []).map(asChild));
+        if (due.changed) store(due.rows);
+        return due.rows;
+      },
+      store,
+      parentId: section.id,
+    };
+  };
+
   // The child, or the failure the server answers with.
-  const editableChild = (id: number): PotokChild | PotokError => {
+  const editableChild = (id: number, under?: number | null): PotokChild | PotokError => {
     if (!ownGroup.can_manage_children) return forbidden;
 
-    const child = children.find((row) => row.id === id);
+    const scope = scopeOf(under);
+    if ('ok' in scope) return scope;
+
+    const child = scope.rows().find((row) => row.id === id);
     if (!child) return { ok: false, error: 'not_found' };
 
     return child.can_edit ? child : forbidden;
   };
 
-  const storeChild = (child: PotokChild) => {
-    children = [...children.filter((row) => row.id !== child.id), child];
-    saveChildren(children);
-    syncPlaces([child]);
-    return { ok: true as const, group: child };
+  const storeChild = (child: PotokChild, under?: number | null) => {
+    const scope = scopeOf(under) as Scope;
+    const before = scope.rows().find((row) => row.id === child.id);
+    const stored = { ...child, parent_id: scope.parentId };
+    scope.store([...scope.rows().filter((row) => row.id !== child.id), stored]);
+
+    // A section renamed keeps its articles.
+    if ((under === undefined || under === null) && before && before.name !== child.name) {
+      const all = loadSubgroups();
+      if (all[before.name]) {
+        all[child.name] = all[before.name];
+        delete all[before.name];
+        saveSubgroups(all);
+      }
+    }
+
+    if (under === undefined || under === null) syncPlaces([stored]);
+    return { ok: true as const, group: stored };
   };
+
+  // `publishAt` as the server checks it, before anything is saved.
+  const publication = (
+    attrs: PotokChildAttrs,
+  ): { at: string | null; as: Publication } | 'keep' | PotokError => {
+    if (attrs.publishAt === undefined) return 'keep';
+    if (attrs.publishAt === null) return { at: null, as: {} };
+
+    const at = Date.parse(attrs.publishAt);
+    const now = Date.now();
+    const as = { publish_public: attrs.publishAs?.isPublic !== false, publish_inherits: attrs.publishAs?.inheritsMembers !== false };
+
+    if (Number.isNaN(at) || at <= now || at - now > 366 * 86_400_000 || !(as.publish_public || as.publish_inherits)) {
+      return { ok: false, error: 'invalid_date', message: 'Pick a time ahead, within a year.' };
+    }
+
+    return { at: new Date(at).toISOString(), as };
+  };
+
+  // After the save: a group that is no draft any more waits for nothing.
+  const withPublication = (child: PotokChild, schedule: ReturnType<typeof publication>): PotokChild => {
+    if (schedule === 'keep' || 'ok' in schedule) {
+      return draft(child) ? child : { ...child, publish_at: null, publish_failure: null };
+    }
+
+    return schedule.at !== null && draft(child)
+      ? ({ ...child, publish_at: schedule.at, publish_failure: null, ...schedule.as } as PotokChild)
+      : { ...child, publish_at: null, publish_failure: null };
+  };
+
+  // What a viewer who does not keep the site sees of a group under a section.
+  const seenInSection = (row: PotokChild): PotokSubgroup | null => {
+    if (!viewerManages && draft(row)) return null;
+    if (viewerId === null && !row.is_public) return null;
+    return asSeenByViewer({ ...row, guest_text: row.for_guests !== false && ownGroup.is_public });
+  };
+
+  const brief = (group: PotokSubgroup): PotokSubgroup => ({
+    ...group,
+    summary: group.description_html === null ? null : plainText(group.description_html).slice(0, 200),
+    description_html: null,
+  });
 
   // A key as the server takes it: 1 to 64 characters, no control characters.
   const validKey = (key: unknown) =>
@@ -1911,9 +2108,21 @@ function createServer(el: HTMLElement) {
     },
 
     listSubgroups(
-      name: string,
+      nameOrId: string | number,
       options: PotokSubgroupListOptions,
     ): PotokSubgroupPage | PotokError {
+      const section = children.find((row) =>
+        typeof nameOrId === 'number' ? row.id === nameOrId : row.name === nameOrId,
+      );
+
+      if (section && !section.uses_api) {
+        const scope = scopeOf(section.id) as Scope;
+        const rows = scope.rows().flatMap((row) => seenInSection(row) ?? []);
+        return pageOf(rows, options);
+      }
+
+      if (typeof nameOrId === 'number') return { ok: false, error: 'not_found' };
+      const name = nameOrId;
       const groups = loadSubgroups()[name];
       if (!groups) return { ok: false, error: 'not_found' };
 
@@ -1930,10 +2139,45 @@ function createServer(el: HTMLElement) {
 
       return {
         ok: true,
-        groups: rows.slice(0, limit).map(asSeenByViewer),
+        groups: rows.slice(0, limit).map(asSeenByViewer).map((group) => (options.brief ? brief(group) : group)),
         has_more: rows.length > limit,
         has_newer: false,
       };
+    },
+
+    getSubgroup(id: number, options: { brief?: boolean }): { ok: true; group: PotokSubgroup & { parent_id: number } } | PotokError {
+      const own = children.find((row) => row.id === id);
+      if (own) return { ok: true, group: { ...(options.brief ? brief(own) : own), parent_id: ownGroup.id } };
+
+      for (const section of children.filter((row) => !row.uses_api)) {
+        const found = (scopeOf(section.id) as Scope).rows().find((row) => row.id === id);
+        const seen = found && seenInSection(found);
+        if (seen) return { ok: true, group: { ...(options.brief ? brief(seen) : seen), parent_id: section.id } };
+      }
+
+      return { ok: false, error: 'not_found' };
+    },
+
+    searchSubgroups(
+      q: string,
+      options: PotokSubgroupListOptions & { under?: number },
+    ): { ok: true; groups: PotokSubgroup[]; has_more: boolean } | PotokError {
+      const term = fold(String(q ?? '').trim());
+      if (term === '') return { ok: true, groups: [], has_more: false };
+
+      const sections = children.filter((row) => !row.uses_api && (options.under === undefined || row.id === options.under));
+      if (options.under !== undefined && sections.length === 0) return { ok: false, error: 'not_found' };
+
+      const found = sections
+        .flatMap((section) => (scopeOf(section.id) as Scope).rows())
+        .flatMap((row) => seenInSection(row) ?? [])
+        .filter((row) => {
+          const text = viewerId === null && (row as PotokChild).for_guests === false ? '' : plainText(row.description_html);
+          return fold(row.name).includes(term) || fold(text).includes(term);
+        });
+
+      const page = pageOf(found, options);
+      return 'groups' in page ? { ok: true, groups: page.groups.map(brief), has_more: page.has_more } : page;
     },
 
     openGroup(id: number, tab: PotokGroupTab | undefined): { ok: true } | PotokError {
@@ -2000,17 +2244,25 @@ function createServer(el: HTMLElement) {
       return { ok: true };
     },
 
-    linkGroup(id: number): { ok: true } | PotokError {
-      if (!Number.isSafeInteger(id) || id <= 0) return { ok: false, error: 'invalid_group' };
+    linkGroup(id: number | null, push: boolean): { ok: true; entry: number | null } | PotokError {
+      if (id !== null && (!Number.isSafeInteger(id) || id <= 0)) return { ok: false, error: 'invalid_group' };
 
       const url = new URL(location.href);
-      url.searchParams.set(LINK_PARAM, String(id));
+      if (id === null) url.searchParams.delete(LINK_PARAM);
+      else url.searchParams.set(LINK_PARAM, String(id));
+
+      if (push && url.href !== location.href) {
+        const entry = Date.now();
+        history.pushState({ ...(history.state ?? {}), potokEntry: entry }, '', url);
+        return { ok: true, entry };
+      }
+
       history.replaceState(history.state, '', url);
-      return { ok: true };
+      return { ok: true, entry: linkedEntry() };
     },
 
-    getLinkedGroup(): { ok: true; group_id: number | null } {
-      return { ok: true, group_id: Number(new URLSearchParams(location.search).get(LINK_PARAM)) || null };
+    getLinkedGroup(): { ok: true; group_id: number | null; entry: number | null } {
+      return { ok: true, group_id: Number(new URLSearchParams(location.search).get(LINK_PARAM)) || null, entry: linkedEntry() };
     },
 
     personal(method: 'list' | 'get' | 'set' | 'delete', key?: unknown, value?: unknown) {
@@ -2067,43 +2319,42 @@ function createServer(el: HTMLElement) {
       };
     },
 
-    listChildren(options: PotokSubgroupListOptions): PotokSubgroupPage | PotokError {
+    listChildren(options: PotokSubgroupListOptions & { under?: number }): PotokSubgroupPage | PotokError {
       if (!ownGroup.can_manage_children) return forbidden;
 
-      const limit = Math.min(nonNegativeInteger(options.limit) ?? DEFAULT_SUBGROUP_LIMIT, MAX_SUBGROUP_LIMIT);
-      const beforeId = nonNegativeInteger(options.beforeId);
-      const period = inPeriod(options);
-      if (typeof period !== 'function') return period;
-      const before = children.find((group) => group.id === beforeId);
+      const scope = scopeOf(options.under);
+      if ('ok' in scope) return scope;
 
-      const inOrder = [...children].sort(compareFeedOrder).filter(period);
-      const around = aroundPage(inOrder, nonNegativeInteger(options.aroundId), limit);
-      if (around) return around;
-
-      const rows = inOrder
-        .filter((group) => {
-          if (beforeId === undefined) return true;
-          return before ? compareFeedOrder(before, group) < 0 : group.id < beforeId;
-        })
-        .slice(0, limit + 1);
-
-      return { ok: true, groups: rows.slice(0, limit), has_more: rows.length > limit, has_newer: false };
+      return pageOf(scope.rows(), options);
     },
 
-    getChild(id: number): { ok: true; group: PotokChild } | PotokError {
+    getChild(id: number, options: { under?: number } = {}): { ok: true; group: PotokChild } | PotokError {
       if (!ownGroup.can_manage_children) return forbidden;
 
-      const child = children.find((row) => row.id === id);
+      const scope = scopeOf(options.under);
+      if ('ok' in scope) return scope;
+
+      const child = scope.rows().find((row) => row.id === id);
       if (!child) return { ok: false, error: 'not_found' };
 
       return { ok: true, group: child.can_edit ? child : { ...child, description: null } };
     },
 
-    createChild(attrs: PotokChildAttrs & { name: string }): { ok: true; group: PotokChild } | PotokError {
+    createChild(
+      attrs: PotokChildAttrs & { name: string; under?: number; editorsOnly?: boolean },
+    ): { ok: true; group: PotokChild } | PotokError {
       if (!ownGroup.can_create_children) return forbidden;
       if (!validAttrs(attrs, false)) return invalidGroup;
 
-      return storeChild(applyAttrs(newChild(nextId(), attrs.name, null), attrs));
+      const scope = scopeOf(attrs.under);
+      if ('ok' in scope) return scope;
+
+      const schedule = publication(attrs);
+      if (typeof schedule === 'object' && 'ok' in schedule) return schedule;
+
+      const made = applyAttrs(newChild(nextId(), attrs.name, null), attrs);
+      const flags = { for_guests: ownGroup.is_public, public_chat: false };
+      return storeChild(withPublication({ ...made, ...flags }, schedule), attrs.under);
     },
 
     // All or none, as the server: a bad child answers with its index.
@@ -2152,30 +2403,82 @@ function createServer(el: HTMLElement) {
       return { ok: true, groups };
     },
 
-    updateChild(id: number, attrs: PotokChildAttrs): { ok: true; group: PotokChild } | PotokError {
-      const child = editableChild(id);
+    updateChild(
+      id: number,
+      attrs: PotokChildAttrs & { under?: number },
+      options: { updatedAt?: string } = {},
+    ): { ok: true; group: PotokChild } | (PotokError & { group?: PotokChild }) {
+      const child = editableChild(id, attrs.under);
       if ('ok' in child) return child;
       if (!validAttrs(attrs)) return invalidGroup;
 
-      const updated = applyAttrs(child, attrs);
-      const opened = closed(child) && !closed(updated);
+      if (options.updatedAt !== undefined && options.updatedAt !== child.updated_at) {
+        return { ok: false, error: 'conflict', message: 'Someone else saved this in the meantime.', group: child };
+      }
 
-      return storeChild({ ...updated, published_at: opened ? timestamp() : updated.published_at });
+      const schedule = publication(attrs);
+      if (typeof schedule === 'object' && 'ok' in schedule) return schedule;
+
+      const updated = applyAttrs(child, attrs);
+      const publishedAt =
+        draft(child) && !draft(updated) ? timestamp() : !draft(child) && draft(updated) ? null : updated.published_at;
+
+      return storeChild(withPublication({ ...updated, published_at: publishedAt }, schedule), attrs.under);
     },
 
-    withdrawChild(id: number): { ok: true; group: PotokChild } | PotokError {
-      const child = editableChild(id);
+    withdrawChild(id: number, options: { under?: number } = {}): { ok: true; group: PotokChild } | PotokError {
+      const child = editableChild(id, options.under);
       if ('ok' in child) return child;
 
-      return storeChild({
-        ...child,
-        is_public: false,
-        inherits_members: false,
-        inherit_role_keys: [],
-        published_at: null,
-        member_count: 1,
-        updated_at: timestamp(),
+      return storeChild(
+        {
+          ...child,
+          is_public: false,
+          inherits_members: false,
+          inherit_role_keys: [],
+          published_at: null,
+          publish_at: null,
+          publish_failure: null,
+          member_count: 1,
+          updated_at: timestamp(),
+        },
+        options.under,
+      );
+    },
+
+    moveChild(id: number, where: { under?: number; to?: number }): { ok: true; group: PotokChild } | PotokError {
+      const child = editableChild(id, where.under ?? null);
+      if ('ok' in child) return child;
+
+      const from = scopeOf(where.under ?? null) as Scope;
+      const to = scopeOf(where.to ?? null);
+      if ('ok' in to || where.to === undefined || where.to === null) return { ok: false, error: 'not_found' };
+
+      from.store(from.rows().filter((row) => row.id !== id));
+      return storeChild({ ...child, updated_at: timestamp() }, where.to);
+    },
+
+    applyAccessToChildren(): { ok: true; updated: number; skipped: number } | PotokError {
+      if (!ownGroup.can_manage_children) return forbidden;
+
+      let updated = 0;
+      const flags = { for_guests: ownGroup.is_public, public_chat: false };
+      const align = (rows: PotokChild[]) =>
+        rows.map((row) => {
+          if (row.for_guests === flags.for_guests && row.public_chat === flags.public_chat) return row;
+          updated += 1;
+          return { ...row, ...flags };
+        });
+
+      const sections = children.filter((row) => !row.uses_api);
+      sections.forEach((section) => {
+        const scope = scopeOf(section.id) as Scope;
+        scope.store(align(scope.rows()));
       });
+      children = children.map((row) => (row.uses_api ? row : align([row])[0]));
+      saveChildren(children);
+
+      return { ok: true, updated, skipped: 0 };
     },
 
     previewDescription(
@@ -2432,7 +2735,9 @@ function createServer(el: HTMLElement) {
     getConfig(): PotokConfigReply | PotokError {
       const config = loadConfig();
       const rules = config?.data.rules ?? {};
-      const anyPublic = Object.keys(rules).some((name) => rulePublic(devRule(config, name), ownGroup));
+      const anyPublic =
+        Object.keys(rules).some((name) => rulePublic(devRule(config, name), ownGroup)) ||
+        (ownGroup.is_public && config?.data.public === true);
 
       if (!viewerMember && !anyPublic) {
         return { ok: false, error: 'not_a_member', message: 'You must be a group member to access group data values.' };
@@ -2497,6 +2802,9 @@ function createServer(el: HTMLElement) {
     ): { ok: true; config: PotokConfig; process_warnings: Record<string, PotokProcessWarning> } | PotokError {
       if (!viewerManages) return forbidden;
       if (byteSize(data) > MAX_CONFIG_BYTES) return { ok: false, error: 'too_large', message: 'That is too much to save.' };
+      if (data.public !== undefined && typeof data.public !== 'boolean') {
+        return { ok: false, error: 'invalid_value', message: 'Could not save the data value.' };
+      }
 
       const current = loadConfig();
       if ((current?.revision ?? 0) !== (revision ?? -1) && !(current === null && (revision ?? 0) === 0)) {
@@ -3095,12 +3403,26 @@ function createSdk(server: DevServer): PotokSdk {
       return server.shareGroup(id, options.inApp);
     },
 
-    async linkGroup(id) {
-      return server.linkGroup(id);
+    async linkGroup(id, options = {}) {
+      return server.linkGroup(id, options.push === true);
     },
 
     async getLinkedGroup() {
       return server.getLinkedGroup();
+    },
+
+    onLinkedGroupChange(listener) {
+      if (typeof listener !== 'function') return () => {};
+      linkListeners.add(listener);
+      return () => linkListeners.delete(listener);
+    },
+
+    async getSubgroup(id, options = {}) {
+      return server.getSubgroup(id, options);
+    },
+
+    async searchSubgroups(q, options = {}) {
+      return server.searchSubgroups(q, options);
     },
 
     async listPersonal() {
@@ -3131,8 +3453,8 @@ function createSdk(server: DevServer): PotokSdk {
       return server.listChildren(options);
     },
 
-    async getChild(id) {
-      return server.getChild(id);
+    async getChild(id, options = {}) {
+      return server.getChild(id, options);
     },
 
     async createChild(attrs) {
@@ -3143,12 +3465,20 @@ function createSdk(server: DevServer): PotokSdk {
       return server.createChildren(list);
     },
 
-    async updateChild(id, attrs) {
-      return server.updateChild(id, attrs);
+    async updateChild(id, attrs, options = {}) {
+      return server.updateChild(id, attrs, options);
     },
 
-    async withdrawChild(id) {
-      return server.withdrawChild(id);
+    async withdrawChild(id, options = {}) {
+      return server.withdrawChild(id, options);
+    },
+
+    async moveChild(id, where) {
+      return server.moveChild(id, where ?? {});
+    },
+
+    async applyAccessToChildren() {
+      return server.applyAccessToChildren();
     },
 
     async previewDescription(description, options = {}) {
