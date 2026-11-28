@@ -6,6 +6,7 @@ import type {
   PotokBounds,
   PotokChild,
   PotokChildAttrs,
+  PotokChildPage,
   PotokCreatedChild,
   PotokCollectionListOptions,
   PotokCollectionValue,
@@ -2323,13 +2324,14 @@ function createServer(el: HTMLElement) {
       };
     },
 
-    listChildren(options: PotokSubgroupListOptions & { under?: number }): PotokSubgroupPage | PotokError {
+    listChildren(options: PotokSubgroupListOptions & { under?: number }): PotokChildPage | PotokError {
       if (!ownGroup.can_manage_children) return forbidden;
 
       const scope = scopeOf(options.under);
       if ('ok' in scope) return scope;
 
-      return pageOf(scope.rows(), options);
+      // Its rows are whole children, so they carry what `PotokChildRow` names.
+      return pageOf(scope.rows(), options) as PotokChildPage | PotokError;
     },
 
     getChild(id: number, options: { under?: number } = {}): { ok: true; group: PotokChild } | PotokError {

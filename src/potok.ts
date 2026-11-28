@@ -958,6 +958,16 @@ export type PotokSubgroupPage = {
   has_newer: boolean;
 };
 
+/**
+ * A row of `listChildren`: what an editors' list needs to tell a draft its
+ * editors share (it inherits only some roles), a scheduled one and a
+ * published one apart.
+ */
+export type PotokChildRow = PotokSubgroup & Pick<PotokChild, 'inherit_role_keys' | 'publish_at' | 'publish_failure'>;
+
+/** A part of `listChildren`, as `PotokSubgroupPage`. */
+export type PotokChildPage = Omit<PotokSubgroupPage, 'groups'> & { groups: PotokChildRow[] };
+
 /** An answer of a poll. `votes_count` is null while the poll's rules keep it from this viewer. */
 export type PotokPollOption = {
   id: number;
@@ -1251,7 +1261,7 @@ export type PotokSdk = {
    */
   listChildren(
     options?: PotokSubgroupListOptions & PotokUnder,
-  ): Promise<PotokSubgroupPage | PotokError>;
+  ): Promise<PotokChildPage | PotokError>;
   getChild(id: number, options?: PotokUnder): Promise<{ ok: true; group: PotokChild } | PotokError>;
   /**
    * Needs `can_create_children`. Without `isPublic` or `inheritsMembers` only
