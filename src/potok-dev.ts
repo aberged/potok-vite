@@ -538,6 +538,8 @@ function loadOwnGroup(): PotokOwnGroup {
     everyone_creates_subgroups: false,
     can_start_polls: true,
     signed_in: true,
+    for_guests: false,
+    public_chat: false,
   };
 
   try {
@@ -1742,6 +1744,7 @@ function createServer(el: HTMLElement) {
       inherits_members: inherits,
       inherit_role_keys: inherits ? roleKeys(attrs.inheritRoleKeys ?? child.inherit_role_keys) : [],
       picture_url: attrs.picture === '' ? devPicture(child.id) : (attrs.picture ?? child.picture_url),
+      has_picture: attrs.picture === '' ? false : attrs.picture !== undefined ? true : child.has_picture,
       member_count: inherits ? 1 + DEV_INHERITED_MEMBERS : child.member_count,
       lat: placed ? (attrs.lat === null ? null : round6(attrs.lat as number)) : child.lat,
       lng: placed ? (attrs.lng === null ? null : round6(attrs.lng as number)) : child.lng,
@@ -1795,6 +1798,7 @@ function createServer(el: HTMLElement) {
       app_description: null,
       uses_api: false,
       picture_url: devPicture(id),
+      has_picture: false,
       is_public: false,
       inherits_members: false,
       creator_id: devProfile.id,
@@ -1978,7 +1982,7 @@ function createServer(el: HTMLElement) {
   const seenInSection = (row: PotokChild): PotokSubgroup | null => {
     if (!viewerManages && draft(row)) return null;
     if (viewerId === null && !row.is_public) return null;
-    return asSeenByViewer({ ...row, guest_text: row.for_guests !== false && ownGroup.is_public });
+    return asSeenByViewer({ ...row, guest_text: row.for_guests === true });
   };
 
   const brief = (group: PotokSubgroup): PotokSubgroup => ({
@@ -2353,7 +2357,7 @@ function createServer(el: HTMLElement) {
       if (typeof schedule === 'object' && 'ok' in schedule) return schedule;
 
       const made = applyAttrs(newChild(nextId(), attrs.name, null), attrs);
-      const flags = { for_guests: ownGroup.is_public, public_chat: false };
+      const flags = { for_guests: ownGroup.for_guests === true, public_chat: ownGroup.public_chat === true };
       return storeChild(withPublication({ ...made, ...flags }, schedule), attrs.under);
     },
 
@@ -2462,7 +2466,7 @@ function createServer(el: HTMLElement) {
       if (!ownGroup.can_manage_children) return forbidden;
 
       let updated = 0;
-      const flags = { for_guests: ownGroup.is_public, public_chat: false };
+      const flags = { for_guests: ownGroup.for_guests === true, public_chat: ownGroup.public_chat === true };
       const align = (rows: PotokChild[]) =>
         rows.map((row) => {
           if (row.for_guests === flags.for_guests && row.public_chat === flags.public_chat) return row;

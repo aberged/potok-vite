@@ -612,6 +612,8 @@ export type PotokSubgroup = {
   app_description: string | null;
   uses_api: boolean;
   picture_url: string;
+  /** Whether `picture_url` is a picture of its own, not the group's initials: what a card shows. */
+  has_picture?: boolean;
   is_public: boolean;
   inherits_members: boolean;
   /** null for a guest, who learns nothing of who made a group. */
@@ -731,6 +733,10 @@ export type PotokOwnGroup = {
   inherit_role_keys: PotokRoleKey[];
   /** null for a viewer who cannot see that group. */
   parent: { id: number; name: string; is_public: boolean; uses_api: boolean } | null;
+  /** Its description goes to guests: what the groups it makes get (`applyAccessToChildren`). */
+  for_guests?: boolean;
+  /** Outsiders write in its chat, an open chat; the groups it makes get it too. */
+  public_chat?: boolean;
   /** The viewer may keep the sub-groups: they hold `edit_group` here. */
   can_manage_children: boolean;
   /** They hold `create_subgroups` as well. */
